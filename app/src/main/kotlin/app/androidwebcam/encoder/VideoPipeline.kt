@@ -83,9 +83,10 @@ class VideoPipeline(
             return
         }
         encoder = enc
-        gl.setEncoderSurface(enc.inputSurface, size.width, size.height)
+        // The encoder may have picked a smaller size than requested (same aspect ratio).
+        gl.setEncoderSurface(enc.inputSurface, enc.width, enc.height)
         enc.requestKeyframe()
-        listener.onStreamSize(size.width, size.height)
+        listener.onStreamSize(enc.width, enc.height)
         if (mjpegWanted) createMjpeg()
     }
 

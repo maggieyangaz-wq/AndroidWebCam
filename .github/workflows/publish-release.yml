@@ -1,0 +1,63 @@
+name: Publish tested release
+
+# Turns a draft created by "Build and sign (draft release)" into a public release.
+# Run it only after the draft's commit passed the local tests. Before publishing it
+# re-checks the draft's APK checksum and signing certificate.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Draft release tag to publish, e.g. v1.0.2"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish draft release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # Same pinned fingerprint as release.yml and README.
+      EXPECTED_CERT_SHA256: "90:50:AE:5D:8D:5A:43:D9:E6:64:1B:34:A9:6A:0D:8C:2E:CA:44:7B:9F:1C:8D:C5:72:FE:79:0C:A7:E4:44:EB"
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Validate tag
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid tag: expected vMAJOR.MINOR.CODE"
+            exit 1
+          fi
+
+      - name: Verify the draft and its signed APK
+        run: |
+          draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "$draft" != "true" ]; then
+            echo "::error::${TAG} is not a draft release (already published or missing)."
+            exit 1
+          fi
+          dir="$RUNNER_TEMP/release"
+          mkdir -p "$dir"
+          cd "$dir"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --pattern 'SHA256SUMS.txt'
+          sha256sum --check SHA256SUMS.txt
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          "$bt/apksigner" verify --print-certs ./*.apk | tee "$RUNNER_TEMP/apksigner.txt"
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt")
+          expected=$(echo "$EXPECTED_CERT_SHA256" | tr -d ':' | tr 'A-F' 'a-f')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::The draft APK is not signed with the expected certificate."
+            exit 1
+          fi
+
+      - name: Publish
+        run: |
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          echo "Published ${TAG}."

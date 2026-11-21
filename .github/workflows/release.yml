@@ -1,13 +1,19 @@
-name: Build, test and release
+name: Build and sign (draft release)
 
+# Release flow: this workflow builds and signs the APK and creates a DRAFT release (not public).
+# The draft is tested locally (unit tests, lint, browser end-to-end, Android 11 emulator);
+# only then is it published with the "Publish tested release" workflow (publish-release.yml)
+# or the "Publish release" button on GitHub. No tests run in GitHub Actions.
 on:
   push:
     branches: [main]
-    paths:
-      - "app/**"
-      - "core/**"
+    paths: # only files that end up in the APK (tests and docs never trigger a release)
+      - "app/src/main/**"
+      - "app/build.gradle.kts"
+      - "app/proguard-rules.pro"
+      - "core/src/main/**"
+      - "core/build.gradle.kts"
       - "gradle/**"
-      - "tools/**"
       - "*.gradle.kts"
       - "gradle.properties"
       - "gradlew"
@@ -30,50 +36,8 @@ env:
   GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=false"
 
 jobs:
-  checks:
-    name: Unit tests and lint
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          persist-credentials: false
-      - name: Select JDK 17
-        run: echo "JAVA_HOME=${JAVA_HOME_17_X64:-$JAVA_HOME}" >> "$GITHUB_ENV"
-      - name: Verify Gradle wrapper checksum
-        run: |
-          version=$(sed -n 's/^distributionUrl=.*gradle-\([0-9.]*\)-bin\.zip$/\1/p' gradle/wrapper/gradle-wrapper.properties)
-          expected=$(curl -fsSL "https://services.gradle.org/distributions/gradle-${version}-wrapper.jar.sha256")
-          echo "${expected}  gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
-      - name: Unit tests and Android Lint
-        run: ./gradlew --stacktrace :core:test :app:testReleaseUnitTest :app:lintRelease
-
-  device-test:
-    name: End-to-end test on Android 11 emulator
-    runs-on: ubuntu-24.04
-    timeout-minutes: 50
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          persist-credentials: false
-      - name: Select JDK 17
-        run: echo "JAVA_HOME=${JAVA_HOME_17_X64:-$JAVA_HOME}" >> "$GITHUB_ENV"
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Install emulator system libraries
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            libpulse0 libnss3 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libxkbfile1 libgl1 libegl1 > /dev/null
-      - name: Run instrumented test (API 30)
-        run: bash tools/run-device-tests.sh
-
   release:
-    name: Signed release
-    needs: [checks, device-test]
+    name: Build, sign and create draft release
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -116,7 +80,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Version ${name} (versionCode ${code})"
 
-      - name: Check whether this version is already released
+      - name: Check whether this version already has a release or draft
         id: existing
         if: steps.version.outputs.skip == 'false'
         env:
@@ -208,15 +172,26 @@ jobs:
             echo
             echo "### 更新内容 / Changes"
             git log --no-merges --pretty='- %s' "$range" | head -n 60
+            echo
+            echo "<sub>commit ${GITHUB_SHA}</sub>"
           } > dist/notes.md
           cat dist/notes.md
 
-      - name: Publish GitHub release
+      - name: Create draft release
         if: steps.existing.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           gh release create "$TAG" dist/*.apk dist/SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft \
             --title "Android WebCam ${TAG}" --notes-file dist/notes.md
+          # Older drafts were superseded by this build and are never published.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft \
+            --jq ".[] | select(.isDraft and .tagName != \"${TAG}\") | .tagName" |
+            while read -r old; do
+              echo "Deleting superseded draft ${old}"
+              gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes
+            done
+          echo "Draft ${TAG} created. Publish it after local tests pass."
+

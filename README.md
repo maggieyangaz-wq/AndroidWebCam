@@ -68,10 +68,12 @@ GitHub Actions 在发版时会强制校验这个指纹，不一致就拒绝发�
 
 ## 构建与发版（GitHub Actions）
 
-- `main` 分支上有代码改动时自动运行 [`.github/workflows/release.yml`](.github/workflows/release.yml)：
-  1. 单元测试 + Android Lint（同时检查 core 模块的 API 兼容性）；
-  2. 在 **Android 11（API 30）模拟器**上运行端到端测试：真实启动前台服务、相机、GPU 旋转、H.264 编码和 TLS 服务，再通过模拟器的局域网地址登录、拉取 H.264 关键帧（并用 Android 解码器解码）和 MJPEG 画面、确认画面为竖屏、确认回环连接被拒绝；
-  3. 两项都通过后，用仓库 Secrets 里的密钥签名，校验签名证书指纹和版本号，然后创建 GitHub Release。
+发版流程：**签名 → 出安装包 → 生成 Release 草稿 → 本地测试通过 → 正式发布**。GitHub Actions 只负责构建、签名和发版，不在 Actions 里跑测试。
+
+1. `main` 分支上有会进入 APK 的改动（`app/src/main`、`core/src/main`、Gradle 配置、`VERSION`、工作流本身）时，自动运行 [`release.yml`](.github/workflows/release.yml)：构建 release APK → 用仓库 Secrets 里的密钥签名 → 校验签名证书指纹和版本号 → 创建 **Release 草稿**（附 APK 和 `SHA256SUMS.txt`，草稿不公开，旧的未发布草稿会被删除）。只改测试或文档不会触发；也可以在 Actions 页面手动运行。
+2. 在开发环境（Claude 的云端开发环境，不是用户的电脑或手机）中对同一个提交执行全部测试，其中包括 **Android 11 模拟器端到端测试**（见下方“测试”）。
+3. 测试全部通过后，由开发环境运行 [`publish-release.yml`](.github/workflows/publish-release.yml)（“Publish tested release”，输入版本号，如 `v1.0.2`）：它会重新下载草稿里的 APK，核对 SHA‑256 和签名证书指纹，然后把草稿转为正式 Release（此时才创建 tag、对外可见）。测试不通过的草稿不会发布，修复后的新草稿会替换它。
+
 - 版本号：`VERSION` 文件里的主次版本 + versionCode，例如 `1.0.37`。versionCode 取 `main` 分支的提交数，但绝不会小于已发布的最大值（即使改写过历史），保证每次更新都能覆盖安装；同一个提交不会重复发版。要升级主次版本，修改 `VERSION` 即可。
 - **不占用 Actions 存储额度**：不使用 Actions 缓存、不上传构建产物（artifact），APK 只发布到 Releases（Release 附件不计入 Actions 存储额度）。仓库是公开的，GitHub 托管运行器的分钟数也不收费。
 - 需要的仓库 Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`（PKCS12，别名 `androidwebcam`）。密钥只保存在 GitHub Secrets 中，请勿提交到仓库（`.gitignore` 已屏蔽常见密钥文件）。
@@ -83,11 +85,15 @@ GitHub Actions 在发版时会强制校验这个指纹，不一致就拒绝发�
 ./gradlew :core:test :app:assembleDebug
 ```
 
-## 测试
+## 测试（在开发环境中执行，通过后才正式发布）
 
-- `core` 模块单元测试：证书与 TLS 1.3 握手（含拒绝 TLS 1.2）、HTTP 解析的各种畸形请求、WebSocket、登录锁定/一次性二维码/会话、H.264 码流处理、旋转不会镜像等（`./gradlew :core:test`）。
-- 浏览器端到端测试（不需要手机）：`./gradlew :core:devServer --args="<端口> <test.h264> <jpeg目录> <info.json>"` 启动一个用测试视频推流的服务，再用 `node tools/viewer-e2e.cjs <端口> <info.json> <截图目录>`（需要 Playwright）验证网页登录、H.264/MJPEG 播放、一次性二维码、CSP 无违规。
-- 模拟器端到端测试：`tools/run-device-tests.sh`（CI 中自动运行）。
+```bash
+./gradlew :core:test :app:testReleaseUnitTest :app:lintRelease
+```
+
+- 单元测试：证书与 TLS 1.3 握手（含拒绝 TLS 1.2）、HTTP 解析的各种畸形请求、慢速请求和单设备连接上限、WebSocket、登录锁定/一次性二维码/会话、H.264 码流处理、旋转不会镜像、编码器尺寸回退等。Android Lint 同时检查 core 模块的 API 兼容性。
+- 浏览器端到端测试（不需要手机）：`./gradlew :core:devServer --args="<端口> <test.h264> <jpeg目录> <info.json>"` 启动一个用测试视频推流的服务，再用 `node tools/viewer-e2e.cjs <端口> <info.json> <截图目录>`（需要 Playwright）验证网页登录、H.264/MJPEG 播放、WebSocket 不通时自动切换 MJPEG、一次性二维码、CSP 无违规。
+- **Android 11（API 30）模拟器端到端测试**：`tools/run-device-tests.sh`（没有 KVM 的机器用 `EMULATOR_ACCEL=off`，软件模拟较慢，超时会自动放大）。它真实启动前台服务、相机、GPU 旋转、H.264 编码和 TLS 服务，再通过模拟器的局域网地址登录、拉取 H.264 关键帧（并用 Android 解码器解码）和 MJPEG 画面，确认 TLS 私钥在 Android Keystore 中、画面为竖屏、回环连接被拒绝。
 
 ### 真机测试清单（以 OnePlus Nord N10 5G / Android 11 为准）
 

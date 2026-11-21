@@ -20,8 +20,8 @@ import java.io.IOException
  * a separate decoder configuration (SPS/PPS) and published to the [StreamHub].
  */
 class H264Encoder(
-    val width: Int,
-    val height: Int,
+    desiredWidth: Int,
+    desiredHeight: Int,
     private val fps: Int,
     private val bitrate: Int,
     private val generation: Int,
@@ -29,6 +29,12 @@ class H264Encoder(
     private val logger: Logger,
     private val onFailure: (H264Encoder) -> Unit,
 ) {
+    /** Actual encoded size; may be smaller than requested if the encoder has lower limits. */
+    var width: Int = desiredWidth
+        private set
+    var height: Int = desiredHeight
+        private set
+    private val desired = desiredWidth to desiredHeight
     private val thread = HandlerThread("awc-encoder").apply { start() }
     private val handler = Handler(thread.looper)
     private var codec: MediaCodec? = null
@@ -39,15 +45,30 @@ class H264Encoder(
 
     @Throws(IOException::class)
     fun start() {
-        val info = selectEncoder() ?: throw IOException("no H.264 encoder supports ${width}x$height")
+        val plan = encodingPlan()
+        if (plan.isEmpty()) {
+            thread.quitSafely()
+            throw IOException("no H.264 encoder supports ${desired.first}x${desired.second} or a smaller size")
+        }
+        var lastError: Exception? = null
+        for ((info, size) in plan) {
+            if (tryStart(info, size.first, size.second)) return
+            lastError = lastStartError
+        }
+        thread.quitSafely()
+        throw IOException("H.264 encoder could not be configured", lastError)
+    }
+
+    private var lastStartError: Exception? = null
+
+    private fun tryStart(info: MediaCodecInfo, w: Int, h: Int): Boolean {
         val caps = info.getCapabilitiesForType(MIME)
         val highLevel = caps.profileLevels.filter { it.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileHigh }.maxOfOrNull { it.level }
         val attempts = listOfNotNull(highLevel?.let { MediaCodecInfo.CodecProfileLevel.AVCProfileHigh to it }, null to null)
-        var lastError: Exception? = null
         for ((profile, level) in attempts) {
             val c = MediaCodec.createByCodecName(info.name)
             try {
-                val format = MediaFormat.createVideoFormat(MIME, width, height).apply {
+                val format = MediaFormat.createVideoFormat(MIME, w, h).apply {
                     setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                     setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
                     setInteger(MediaFormat.KEY_FRAME_RATE, fps)
@@ -61,31 +82,48 @@ class H264Encoder(
                 }
                 c.setCallback(callback, handler)
                 c.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                inputSurface = c.createInputSurface()
-                c.start()
+                val surface = c.createInputSurface()
+                try {
+                    c.start()
+                } catch (e: Exception) {
+                    surface.release()
+                    throw e
+                }
+                inputSurface = surface
                 codec = c
-                logger.i("encoder ${info.name} ${width}x$height@$fps ${bitrate / 1000} kbps profile=${profile ?: "default"}")
-                return
+                width = w
+                height = h
+                logger.i("encoder ${info.name} ${w}x$h@$fps ${bitrate / 1000} kbps profile=${profile ?: "default"}")
+                return true
             } catch (e: Exception) {
-                lastError = e
-                logger.w("encoder configuration failed (profile=$profile)", e)
+                lastStartError = e
+                logger.w("encoder configuration failed (${info.name} ${w}x$h profile=$profile)", e)
                 try { c.release() } catch (_: Exception) {}
             }
         }
-        thread.quitSafely()
-        throw IOException("H.264 encoder could not be configured", lastError)
+        return false
     }
 
-    private fun selectEncoder(): MediaCodecInfo? {
+    /**
+     * Encoders (hardware first) and sizes to try, largest first. Some encoders cap the
+     * frame size (or only accept landscape sizes up to a limit); then the largest smaller
+     * size with the same aspect ratio is used instead of failing.
+     */
+    private fun encodingPlan(): List<Pair<MediaCodecInfo, Pair<Int, Int>>> {
         val all = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
             info.isEncoder && !info.isAlias && info.supportedTypes.any { it.equals(MIME, ignoreCase = true) }
         }
-        fun usable(info: MediaCodecInfo): Boolean = try {
-            info.getCapabilitiesForType(MIME).videoCapabilities?.isSizeSupported(width, height) == true
-        } catch (e: Exception) {
-            false
+        // Hardware first: a hardware encoder at a slightly smaller size beats software encoding
+        // (heat, battery, frame rate). Each encoder is tried at its largest supported size.
+        val encoders = all.filter { it.isHardwareAccelerated } + all.filterNot { it.isHardwareAccelerated }
+        val candidates = EncoderSizes.candidates(desired.first, desired.second)
+        val plan = ArrayList<Pair<MediaCodecInfo, Pair<Int, Int>>>()
+        for (info in encoders) {
+            val caps = try { info.getCapabilitiesForType(MIME).videoCapabilities } catch (e: Exception) { null } ?: continue
+            val size = candidates.firstOrNull { caps.isSizeSupported(it.first, it.second) } ?: continue
+            plan.add(info to size)
         }
-        return all.filter { it.isHardwareAccelerated }.firstOrNull(::usable) ?: all.firstOrNull(::usable)
+        return plan
     }
 
     fun requestKeyframe() {

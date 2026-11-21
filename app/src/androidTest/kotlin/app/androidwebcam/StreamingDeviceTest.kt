@@ -1,12 +1,12 @@
 package app.androidwebcam
 
 import android.Manifest
+import android.content.Intent
 import android.graphics.BitmapFactory
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
 import android.os.SystemClock
-import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
@@ -51,18 +51,29 @@ class StreamingDeviceTest {
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
+    /** Timeouts are multiplied by this (software-emulated devices are much slower). */
+    private val scale = InstrumentationRegistry.getArguments().getString("timeoutScale")?.toDoubleOrNull()?.coerceAtLeast(1.0) ?: 1.0
+
+    private fun t(ms: Long): Long = (ms * scale).toLong()
+
     @After
     fun tearDown() {
         StreamingService.stop(context)
-        waitFor(20_000) { StreamController.state.value.takeIf { it.phase == Phase.IDLE } }
+        waitFor(t(20_000)) { StreamController.state.value.takeIf { it.phase == Phase.IDLE } }
     }
 
     @Test
     fun streamsOverTls13OnTheLocalNetwork() {
         SettingsStore(context).save(StreamSettings(quality = Quality.P720, fps = 15, orientation = 0, port = 8443))
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            scenario.onActivity { StreamingService.start(it) }
-            val state = waitFor(90_000) {
+        // Start the service while the activity is in the foreground (Android 11 camera rules).
+        // startActivitySync has no fixed launch timeout (slow, software-emulated devices).
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val activity = instrumentation.startActivitySync(
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        try {
+            instrumentation.runOnMainSync { StreamingService.start(activity) }
+            val state = waitFor(t(90_000)) {
                 StreamController.state.value.takeIf { it.phase == Phase.RUNNING && it.endpoints.isNotEmpty() && it.streamWidth > 0 }
             }
             log("state: endpoints=${state.endpoints} stream=${state.streamWidth}x${state.streamHeight} hardwareKey=${state.hardwareKey}")
@@ -99,7 +110,7 @@ class StreamingDeviceTest {
                 assertEquals(101, c.readHead().status)
                 var config: String? = null
                 var keyframe: ByteArray? = null
-                val deadline = SystemClock.uptimeMillis() + 60_000
+                val deadline = SystemClock.uptimeMillis() + t(60_000)
                 while ((config == null || keyframe == null) && SystemClock.uptimeMillis() < deadline) {
                     val (opcode, payload) = c.readWsFrame()
                     if (opcode == 1) config = String(payload)
@@ -138,6 +149,8 @@ class StreamingDeviceTest {
                 fail("loopback connections must be refused")
             } catch (expected: Exception) {
             }
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
         }
     }
 
@@ -174,8 +187,8 @@ class StreamingDeviceTest {
 
     private fun connect(tls: SSLContext, host: String, port: Int): Client {
         val socket = tls.socketFactory.createSocket() as SSLSocket
-        socket.connect(InetSocketAddress(host, port), 10_000)
-        socket.soTimeout = 30_000
+        socket.connect(InetSocketAddress(host, port), t(10_000).toInt())
+        socket.soTimeout = t(30_000).toInt()
         socket.startHandshake()
         assertEquals("TLSv1.3", socket.session.protocol)
         return Client(socket)
@@ -207,12 +220,12 @@ class StreamingDeviceTest {
             decoder.configure(format, null, null, 0)
             decoder.start()
             val frame = annexB.toByteArray()
-            val inIndex = decoder.dequeueInputBuffer(5_000_000)
+            val inIndex = decoder.dequeueInputBuffer(t(5_000) * 1000)
             if (inIndex < 0) return false
             decoder.getInputBuffer(inIndex)!!.put(frame)
             decoder.queueInputBuffer(inIndex, 0, frame.size, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
             val info = MediaCodec.BufferInfo()
-            val deadline = SystemClock.uptimeMillis() + 10_000
+            val deadline = SystemClock.uptimeMillis() + t(10_000)
             while (SystemClock.uptimeMillis() < deadline) {
                 val out = decoder.dequeueOutputBuffer(info, 100_000)
                 if (out >= 0) {
