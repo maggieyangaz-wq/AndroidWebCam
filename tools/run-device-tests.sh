@@ -1,17 +1,34 @@
 #!/usr/bin/env bash
-# Boots a headless Android emulator (default: Android 11 / API 30, like the target phone)
-# and runs the instrumented end-to-end test (app/src/androidTest).
-# Needs ANDROID_HOME with cmdline-tools and the emulator's system libraries
-# (libpulse0, libnss3, libx* ...). Without KVM, run with EMULATOR_ACCEL=off
-# (software emulation: slow, so boot and test timeouts are scaled up).
+# Android emulator tests for a release candidate (default: Android 11 / API 30, like the target phone):
+#   1. functional end-to-end test (StreamingDeviceTest): service, camera, GL, H.264, MJPEG and the
+#      TLS 1.3 server with its Keystore key, used over the device's LAN address like a browser;
+#   2. upgrade install keeps data (UpgradeDeviceTest, debug build N -> N+1 with `adb install -r`):
+#      in-place update, settings kept, same TLS certificate, streaming still works;
+#   3. a release build installs over the previous release (built from the latest v* tag) and
+#      downgrades are refused (release builds signed with a throwaway key).
+#
+# Drives the device directly with adb / am instrument (robust on slow, software-emulated devices).
+# Reuses a running emulator; otherwise boots one, from the "awc_clean" snapshot when available.
+# Needs ANDROID_HOME (cmdline-tools) and the emulator's system libraries (libpulse0, libnss3, libx*).
+# Without KVM use EMULATOR_ACCEL=off (software emulation; boot and test timeouts are scaled up).
+# KEEP_EMULATOR=1 leaves an emulator started by this script running.
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
 API="${API_LEVEL:-30}"
 IMAGE="system-images;android-${API};default;x86_64"
 SDK="${ANDROID_HOME:?ANDROID_HOME is not set}"
 BIN="$SDK/cmdline-tools/latest/bin"
 ADB="$SDK/platform-tools/adb"
-LOG="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/emulator.log"
+WORK="$(mktemp -d)"
+LOG="$WORK/emulator.log"
+SNAPSHOT=awc_clean
+DEBUG_PKG=app.androidwebcam.debug
+RELEASE_PKG=app.androidwebcam
+RUNNER="$DEBUG_PKG.test/androidx.test.runner.AndroidJUnitRunner"
+export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}" # avdmanager and emulator must agree
+mkdir -p "$ANDROID_AVD_HOME"
+
 ACCEL="${EMULATOR_ACCEL:-auto}"
 if [ "$ACCEL" = off ]; then
   export ANDROID_I_WANT_MY_TCG=yes # the emulator refuses software CPU emulation unless forced
@@ -25,69 +42,174 @@ else
   CORES=2
   MEMORY=3072
 fi
-# avdmanager and the emulator must agree on where AVDs live.
-export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
-mkdir -p "$ANDROID_AVD_HOME"
+STARTED_EMULATOR=false
 
-yes 2> /dev/null | "$BIN/sdkmanager" --licenses > /dev/null 2>&1 || true
-"$BIN/sdkmanager" --install "emulator" "platform-tools" "$IMAGE" > /dev/null
-echo no | "$BIN/avdmanager" create avd --force --name awc --package "$IMAGE" --device pixel_5 > /dev/null
-"$SDK/emulator/emulator" -list-avds | grep -qx awc || { echo "AVD was not created in $ANDROID_AVD_HOME"; exit 1; }
-"$SDK/emulator/emulator" -accel-check || true
-
-"$ADB" start-server > /dev/null 2>&1
-"$SDK/emulator/emulator" -avd awc -no-window -no-audio -no-boot-anim -no-snapshot -no-metrics -wipe-data \
-  -gpu swiftshader_indirect -camera-back emulated -camera-front none -memory "$MEMORY" -cores "$CORES" \
-  -accel "$ACCEL" > "$LOG" 2>&1 &
-EMULATOR_PID=$!
+log() { echo "== $*"; }
 
 cleanup() {
   local status=$?
-  if [ "$status" -ne 0 ]; then
+  if [ "$status" -ne 0 ] && [ -s "$LOG" ]; then
     echo "----- emulator log (tail) -----"
-    tail -n 60 "$LOG" 2> /dev/null || true
+    tail -n 40 "$LOG" || true
   fi
-  "$ADB" emu kill > /dev/null 2>&1 || kill "$EMULATOR_PID" 2> /dev/null || true
+  if [ "$STARTED_EMULATOR" = true ] && [ "${KEEP_EMULATOR:-0}" != 1 ]; then
+    "$ADB" emu kill > /dev/null 2>&1 || true
+  fi
+  git worktree remove --force "$WORK/prev" > /dev/null 2>&1 || true
+  rm -rf "$WORK"
 }
 trap cleanup EXIT
 
-echo "Waiting for the emulator to boot..."
-booted=false
-for i in $(seq 1 $((BOOT_TIMEOUT / 5))); do
-  if ! kill -0 "$EMULATOR_PID" 2> /dev/null; then
-    echo "The emulator process exited."
+device_ready() { [ "$("$ADB" shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ]; }
+
+prepare_device() {
+  timeout 600 bash -c "until '$ADB' shell pm list packages > /dev/null 2>&1; do sleep 2; done"
+  for s in window_animation_scale transition_animation_scale animator_duration_scale; do
+    "$ADB" shell settings put global "$s" 0
+  done
+  "$ADB" shell settings put global verifier_verify_adb_installs 0 > /dev/null 2>&1 || true
+  "$ADB" shell svc wifi enable > /dev/null 2>&1 || true
+  # The app only serves on LAN interfaces (Wi-Fi), never on the emulated mobile network.
+  timeout 180 bash -c "until '$ADB' shell ip -4 addr show wlan0 2> /dev/null | grep -q 'inet '; do sleep 2; done" \
+    || echo "warning: wlan0 has no IPv4 address"
+  "$ADB" shell wm dismiss-keyguard > /dev/null 2>&1 || true
+  "$ADB" shell input keyevent 82 > /dev/null 2>&1 || true
+  for p in "$DEBUG_PKG" "$DEBUG_PKG.test" "$RELEASE_PKG"; do "$ADB" uninstall "$p" > /dev/null 2>&1 || true; done
+}
+
+boot_emulator() {
+  yes 2> /dev/null | "$BIN/sdkmanager" --licenses > /dev/null 2>&1 || true
+  "$BIN/sdkmanager" --install "emulator" "platform-tools" "$IMAGE" > /dev/null
+  if ! "$SDK/emulator/emulator" -list-avds | grep -qx awc; then
+    echo no | "$BIN/avdmanager" create avd --force --name awc --package "$IMAGE" --device pixel_5 > /dev/null
+  fi
+  local fresh=true
+  local boot_args=(-no-snapshot-load -wipe-data)
+  if [ -d "$ANDROID_AVD_HOME/awc.avd/snapshots/$SNAPSHOT" ]; then
+    fresh=false
+    boot_args=(-snapshot "$SNAPSHOT")
+  fi
+  log "Starting emulator (accel=$ACCEL, $([ "$fresh" = true ] && echo "cold boot" || echo "snapshot $SNAPSHOT"))"
+  "$ADB" start-server > /dev/null 2>&1
+  "$SDK/emulator/emulator" -avd awc -no-window -no-audio -no-boot-anim -no-metrics -no-snapshot-save "${boot_args[@]}" \
+    -gpu swiftshader_indirect -camera-back emulated -camera-front none -memory "$MEMORY" -cores "$CORES" \
+    -accel "$ACCEL" > "$LOG" 2>&1 &
+  local pid=$!
+  STARTED_EMULATOR=true
+  for i in $(seq 1 $((BOOT_TIMEOUT / 5))); do
+    if ! kill -0 "$pid" 2> /dev/null; then
+      echo "The emulator process exited."
+      exit 1
+    fi
+    device_ready && break
+    if [ $((i % 12)) -eq 0 ]; then echo "  still booting after $((i * 5)) s"; fi
+    sleep 5
+  done
+  if ! device_ready; then
+    echo "The emulator did not finish booting in time."
     exit 1
   fi
-  if [ "$("$ADB" shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = "1" ]; then
-    booted=true
-    break
+  prepare_device
+  if [ "$fresh" = true ]; then
+    log "Saving snapshot $SNAPSHOT for faster runs"
+    "$ADB" emu avd snapshot save "$SNAPSHOT" > /dev/null 2>&1 || echo "warning: snapshot not saved"
   fi
-  if [ $((i % 12)) -eq 0 ]; then echo "  still booting after $((i * 5)) s: $("$ADB" devices | tail -n +2 | tr '\n' ' ')"; fi
-  sleep 5
-done
-if [ "$booted" != true ]; then
-  echo "The emulator did not finish booting in time."
+}
+
+# Runs one instrumented test; prints the runner output; fails unless it reports OK.
+instrument() {
+  local target=$1
+  shift
+  local out
+  out=$("$ADB" shell am instrument -w -e class "$target" -e timeoutScale "$TIMEOUT_SCALE" "$@" "$RUNNER" 2>&1 | tr -d '\r') || true
+  echo "$out" | grep -vE '^\s*$' | tail -n 25
+  echo "$out" | grep -q '^OK ('
+}
+
+install_apk() {
+  local out
+  out=$("$ADB" install "$@" 2>&1 | tr -d '\r') || true
+  echo "  adb install $*: $(echo "$out" | tail -n 1)"
+  echo "$out" | grep -q '^Success'
+}
+
+package_field() { "$ADB" shell dumpsys package "$1" | tr -d '\r' | grep -m1 -oE "$2=[^ ]+( [0-9:]+)?" | cut -d= -f2-; }
+
+fail() {
+  echo "FAILED: $*"
+  "$ADB" logcat -d -v brief -s "AndroidWebCam:*" "AndroidRuntime:E" "System.out:I" 2> /dev/null | tail -n 60 || true
   exit 1
+}
+
+# ------------------------------------------------------------------------------ device
+if [ "$("$ADB" get-state 2> /dev/null || true)" = device ] && device_ready; then
+  log "Using the running emulator/device"
+  prepare_device
+else
+  boot_emulator
 fi
-timeout 600 bash -c "until '$ADB' shell pm list packages > /dev/null 2>&1; do sleep 2; done"
-for s in window_animation_scale transition_animation_scale animator_duration_scale; do
-  "$ADB" shell settings put global "$s" 0
-done
-"$ADB" shell svc wifi enable > /dev/null 2>&1 || true
-# The app only serves on LAN interfaces (Wi-Fi), never on the emulated mobile network.
-timeout 120 bash -c "until '$ADB' shell ip -4 addr show wlan0 2> /dev/null | grep -q 'inet '; do sleep 2; done" \
-  || echo "warning: wlan0 has no IPv4 address"
-"$ADB" shell ip -4 addr 2> /dev/null | grep -E '^[0-9]+:|inet ' || true
-"$ADB" shell wm dismiss-keyguard > /dev/null 2>&1 || true
-"$ADB" shell input keyevent 82 > /dev/null 2>&1 || true
-echo "Emulator ready: Android $("$ADB" shell getprop ro.build.version.release | tr -d '\r') (API $API)"
+echo "Device: Android $("$ADB" shell getprop ro.build.version.release | tr -d '\r') (API $("$ADB" shell getprop ro.build.version.sdk | tr -d '\r'))"
 
-set +e
-./gradlew --stacktrace :app:connectedDebugAndroidTest \
-  -Pandroid.testInstrumentationRunnerArguments.timeoutScale="$TIMEOUT_SCALE"
-status=$?
-set -e
+# ------------------------------------------------------------------------------ builds
+log "Building debug APKs (versionCode 100 and 101) and the test APK"
+./gradlew -q --console=plain :app:assembleDebug :app:assembleDebugAndroidTest -PawcVersionCode=100 -PawcVersionName=test-100
+cp app/build/outputs/apk/debug/app-debug.apk "$WORK/debug-100.apk"
+cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk "$WORK/debug-test.apk"
+./gradlew -q --console=plain :app:assembleDebug -PawcVersionCode=101 -PawcVersionName=test-101
+cp app/build/outputs/apk/debug/app-debug.apk "$WORK/debug-101.apk"
 
-echo "----- test output (logcat) -----"
-"$ADB" logcat -d -v brief -s "System.out:I" "AndroidWebCam:*" "AndroidRuntime:E" "TestRunner:*" 2> /dev/null | tail -n 150 || true
-exit "$status"
+install_apk "$WORK/debug-100.apk" || fail "install debug APK"
+install_apk "$WORK/debug-test.apk" || fail "install test APK"
+
+# ------------------------------------------------------------------------------ 1
+log "1/3 Functional end-to-end test"
+"$ADB" logcat -c || true
+instrument app.androidwebcam.StreamingDeviceTest || fail "functional end-to-end test"
+
+# ------------------------------------------------------------------------------ 2
+log "2/3 Upgrade install keeps settings and TLS identity (debug 100 -> 101)"
+instrument "app.androidwebcam.UpgradeDeviceTest#prepareBeforeUpgrade" -e upgradePhase prepare || fail "upgrade prepare"
+install_apk -r "$WORK/debug-101.apk" || fail "in-place upgrade install (debug)"
+instrument "app.androidwebcam.UpgradeDeviceTest#verifyAfterUpgrade" -e upgradePhase verify -e expectedVersionCode 101 \
+  || fail "state after upgrade"
+
+# ------------------------------------------------------------------------------ 3
+log "3/3 Release build installs over the previous release; downgrade refused"
+export ANDROID_KEYSTORE_PASSWORD
+ANDROID_KEYSTORE_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)
+keytool -genkeypair -storetype PKCS12 -keystore "$WORK/test.p12" -alias androidwebcam -keyalg EC -groupname secp256r1 \
+  -validity 30 -dname "CN=Upgrade Test" -storepass "$ANDROID_KEYSTORE_PASSWORD" -keypass "$ANDROID_KEYSTORE_PASSWORD" > /dev/null 2>&1
+export ANDROID_KEYSTORE_FILE="$WORK/test.p12" ANDROID_KEY_ALIAS=androidwebcam
+git fetch -q --tags origin 2> /dev/null || true
+previous=$(git describe --tags --abbrev=0 --match 'v*' 2> /dev/null || true)
+if [ -n "$previous" ]; then
+  echo "  previous release: $previous"
+  git worktree add -q --detach "$WORK/prev" "$previous"
+  (cd "$WORK/prev" && ./gradlew -q --console=plain :app:assembleRelease -PawcVersionCode=200 -PawcVersionName=previous)
+  cp "$WORK/prev/app/build/outputs/apk/release/app-release.apk" "$WORK/release-200.apk"
+  git worktree remove --force "$WORK/prev"
+else
+  echo "  no previous release yet: using the current code as the old version"
+  ./gradlew -q --console=plain :app:assembleRelease -PawcVersionCode=200 -PawcVersionName=previous
+  cp app/build/outputs/apk/release/app-release.apk "$WORK/release-200.apk"
+fi
+./gradlew -q --console=plain :app:assembleRelease -PawcVersionCode=201 -PawcVersionName=candidate
+cp app/build/outputs/apk/release/app-release.apk "$WORK/release-201.apk"
+unset ANDROID_KEYSTORE_FILE ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS
+
+install_apk "$WORK/release-200.apk" || fail "install previous release"
+"$ADB" shell am start -W -n "$RELEASE_PKG/.MainActivity" > /dev/null || fail "launch previous release"
+first_installed=$(package_field "$RELEASE_PKG" firstInstallTime)
+install_apk -r "$WORK/release-201.apk" || fail "upgrade install over the previous release"
+[ "$(package_field "$RELEASE_PKG" versionCode)" = 201 ] || fail "versionCode after upgrade"
+[ "$(package_field "$RELEASE_PKG" firstInstallTime)" = "$first_installed" ] || fail "upgrade must not reinstall"
+"$ADB" logcat -b crash -c > /dev/null 2>&1 || true
+"$ADB" shell am start -W -n "$RELEASE_PKG/.MainActivity" > /dev/null || fail "launch upgraded release"
+sleep $((5 * TIMEOUT_SCALE))
+[ -n "$("$ADB" shell pidof "$RELEASE_PKG" | tr -d '\r')" ] || fail "upgraded release is not running"
+if "$ADB" logcat -d -b crash 2> /dev/null | grep -q "$RELEASE_PKG"; then fail "upgraded release crashed"; fi
+if install_apk -r "$WORK/release-200.apk"; then fail "downgrade must be refused"; fi
+echo "  downgrade refused as expected"
+"$ADB" uninstall "$RELEASE_PKG" > /dev/null 2>&1 || true
+
+log "ALL DEVICE TESTS PASSED"

@@ -87,13 +87,18 @@ GitHub Actions 在发版时会强制校验这个指纹，不一致就拒绝发�
 
 ## 测试（在开发环境中执行，通过后才正式发布）
 
+一条命令完成全部检查（没有 KVM 的机器加 `EMULATOR_ACCEL=off`），最后输出 `ALL CHECKS PASSED` 才会发布：
+
 ```bash
-./gradlew :core:test :app:testReleaseUnitTest :app:lintRelease
+tools/verify-release.sh
 ```
 
-- 单元测试：证书与 TLS 1.3 握手（含拒绝 TLS 1.2）、HTTP 解析的各种畸形请求、慢速请求和单设备连接上限、WebSocket、登录锁定/一次性二维码/会话、H.264 码流处理、旋转不会镜像、编码器尺寸回退等。Android Lint 同时检查 core 模块的 API 兼容性。
-- 浏览器端到端测试（不需要手机）：`./gradlew :core:devServer --args="<端口> <test.h264> <jpeg目录> <info.json>"` 启动一个用测试视频推流的服务，再用 `node tools/viewer-e2e.cjs <端口> <info.json> <截图目录>`（需要 Playwright）验证网页登录、H.264/MJPEG 播放、WebSocket 不通时自动切换 MJPEG、一次性二维码、CSP 无违规。
-- **Android 11（API 30）模拟器端到端测试**：`tools/run-device-tests.sh`（没有 KVM 的机器用 `EMULATOR_ACCEL=off`，软件模拟较慢，超时会自动放大）。它真实启动前台服务、相机、GPU 旋转、H.264 编码和 TLS 服务，再通过模拟器的局域网地址登录、拉取 H.264 关键帧（并用 Android 解码器解码）和 MJPEG 画面，确认 TLS 私钥在 Android Keystore 中、画面为竖屏、回环连接被拒绝。
+- 单元测试 + Android Lint：证书与 TLS 1.3 握手（含拒绝 TLS 1.2）、HTTP 解析的各种畸形请求、慢速请求和单设备连接上限、WebSocket、登录锁定/一次性二维码/会话、H.264 码流处理、旋转不会镜像、编码器尺寸回退等；Lint 同时检查 core 模块的 API 兼容性。
+- 浏览器端到端测试（`tools/run-browser-tests.sh`）：用测试视频验证网页登录、H.264/MJPEG 播放、WebSocket 不通时自动切换 MJPEG、一次性二维码、CSP 无违规。
+- **Android 11（API 30）模拟器测试**（`tools/run-device-tests.sh`）：
+  1. 功能端到端：真实启动前台服务、相机、GPU 旋转、H.264 编码和 TLS 服务，通过模拟器的局域网地址登录、拉取 H.264 关键帧（并用 Android 解码器解码）和 MJPEG 画面，确认 TLS 私钥在 Android Keystore 中、画面为竖屏、回环连接被拒绝；
+  2. **覆盖升级安装**：旧版本运行后用 `adb install -r` 安装新版本，确认是原地升级（不是重装）、设置保留、HTTPS 证书指纹不变（升级后浏览器不会再次提示证书）、推流正常；
+  3. **正式版覆盖升级**：用上一个正式发布版本的代码构建旧 APK，新版本覆盖安装成功并能正常启动，且旧版本无法降级覆盖新版本。
 
 ### 真机测试清单（以 OnePlus Nord N10 5G / Android 11 为准）
 
