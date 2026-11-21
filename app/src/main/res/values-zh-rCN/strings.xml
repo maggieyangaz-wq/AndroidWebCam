@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="status_idle">未在推流</string>
+    <string name="status_starting">正在启动…</string>
+    <string name="status_running">正在推流</string>
+    <string name="status_error">出错</string>
+    <string name="btn_start">开始推流</string>
+    <string name="btn_stop">停止推流</string>
+    <string name="preview_off">摄像头已关闭。开始推流前不会采集任何画面。</string>
+    <string name="stream_format">%1$d×%2$d · %3$d 帧/秒 · H.264 + MJPEG</string>
+
+    <string name="section_connect">在其他设备上观看</string>
+    <string name="connect_steps">1. 让另一台设备连接同一个 Wi-Fi（或连接本机热点）。\n2. 用浏览器（Chrome、Edge、Safari 或 Firefox）打开下面的地址。\n3. 第一次打开时浏览器会提示证书不受信任（自签名证书）：核对下面的证书指纹一致后选择继续访问。\n4. 输入访问码，或用另一台设备扫描二维码。</string>
+    <string name="connect_no_network">没有找到 Wi-Fi 或热点地址。请连接 Wi-Fi 或打开热点；不会使用移动数据。</string>
+    <string name="label_access_code">访问码</string>
+    <string name="access_code_hint">每次开始推流都会生成新的访问码。</string>
+    <string name="label_qr">扫码连接（一次性链接，5 分钟内有效）</string>
+    <string name="action_copy">复制地址</string>
+    <string name="copied">地址已复制</string>
+    <string name="label_fingerprint">证书指纹（SHA-256）</string>
+    <string name="key_hardware">TLS 私钥保存在手机安全硬件（Android Keystore）中，无法被导出。</string>
+    <string name="key_software">安全硬件密钥不可用：本次推流使用临时密钥。</string>
+    <string name="label_viewers">观看者（%1$d/%2$d）</string>
+    <string name="no_viewers">暂时没有人在观看。</string>
+    <string name="viewer_line">%1$s · %2$s · %3$s</string>
+    <string name="action_disconnect_all">断开所有观看者并更换访问码</string>
+    <string name="label_alerts">最近的安全事件</string>
+
+    <string name="section_controls">摄像头控制</string>
+    <string name="label_torch">闪光灯</string>
+    <string name="label_zoom">缩放 %1$.1f×</string>
+
+    <string name="section_settings">设置</string>
+    <string name="settings_locked_hint">停止推流后才能修改这些设置。</string>
+    <string name="label_camera">后置摄像头</string>
+    <string name="camera_main">主摄</string>
+    <string name="camera_ultrawide">超广角</string>
+    <string name="camera_tele">长焦</string>
+    <string name="camera_other">后置摄像头 %1$s</string>
+    <string name="camera_fov">%1$s（约 %2$d°）</string>
+    <string name="label_quality">分辨率</string>
+    <string name="label_fps">帧率</string>
+    <string name="label_orientation">画面方向</string>
+    <string name="orientation_auto">自动（跟随手机摆放方向）</string>
+    <string name="orientation_0">竖屏</string>
+    <string name="orientation_90">横屏，手机顶部朝右</string>
+    <string name="orientation_270">横屏，手机顶部朝左</string>
+    <string name="orientation_180">竖屏倒置</string>
+    <string name="label_port">端口</string>
+    <string name="port_invalid">请使用 1024 到 65535 之间的端口。</string>
+
+    <string name="section_battery">熄屏后继续推流</string>
+    <string name="battery_text">OxygenOS 可能会在后台停止应用。允许 Android WebCam 忽略电池优化，熄屏后推流才不会中断。</string>
+    <string name="battery_button">允许</string>
+
+    <string name="section_privacy">安全与隐私</string>
+    <string name="privacy_points">• 只传画面：从不使用麦克风，不录像、不保存任何内容。\n• 仅限局域网（Wi-Fi、热点、USB 网络共享），拒绝来自移动数据或 VPN 的连接。没有云端、没有账号、没有统计、没有广告。\n• TLS 1.3 加密，每次推流都更换访问码，登录有频率限制，会话绑定观看者 IP。\n• 后置摄像头画面永不镜像。\n• 禁止截屏和录屏本应用。</string>
+
+    <string name="error_camera_permission">需要相机权限才能推流。</string>
+    <string name="error_port_in_use">端口 %1$d 已被占用，请在设置中更换端口。</string>
+    <string name="error_camera">摄像头出现问题：%1$s</string>
+    <string name="error_encoder">视频编码器出现问题：%1$s</string>
+    <string name="error_generic">无法启动：%1$s</string>
+    <string name="error_no_camera">没有可用的后置摄像头。</string>
+    <string name="error_camera_busy">摄像头正被其他应用使用，空闲后会自动恢复推流。</string>
+
+    <string name="notif_channel_stream">推流状态</string>
+    <string name="notif_channel_security">安全提醒</string>
+    <string name="notif_title">正在共享摄像头画面</string>
+    <string name="notif_text_viewers">观看人数：%1$d · %2$s</string>
+    <string name="notif_text_no_viewers">等待观看者 · %1$s</string>
+    <string name="notif_public">Android WebCam 正在使用摄像头</string>
+    <string name="action_stop">停止</string>
+    <string name="alert_viewer">新的观看者：%1$s（%2$s）</string>
+    <string name="alert_viewer_qr">新的观看者（扫码）：%1$s（%2$s）</string>
+    <string name="alert_locked">%1$s 多次输错访问码，已封禁 %2$d 秒</string>
+    <string name="alert_rotated">错误次数过多，访问码已自动更换</string>
+    <string name="kind_wifi">Wi-Fi</string>
+    <string name="kind_hotspot">热点</string>
+    <string name="kind_usb">USB 网络共享</string>
+    <string name="kind_ethernet">以太网</string>
+    <string name="kind_other">局域网</string>
+    <string name="label_qr_for">二维码对应</string>
+</resources>

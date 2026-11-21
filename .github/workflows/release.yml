@@ -1,0 +1,222 @@
+name: Build, test and release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "core/**"
+      - "gradle/**"
+      - "tools/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - "gradlew"
+      - "VERSION"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Public fingerprint of the release signing certificate (also listed in README).
+  # A release is refused if the APK is signed with any other certificate.
+  EXPECTED_CERT_SHA256: "90:50:AE:5D:8D:5A:43:D9:E6:64:1B:34:A9:6A:0D:8C:2E:CA:44:7B:9F:1C:8D:C5:72:FE:79:0C:A7:E4:44:EB"
+  # No Gradle build cache and no Actions cache/artifacts: nothing is stored in GitHub Actions storage.
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=false"
+
+jobs:
+  checks:
+    name: Unit tests and lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Select JDK 17
+        run: echo "JAVA_HOME=${JAVA_HOME_17_X64:-$JAVA_HOME}" >> "$GITHUB_ENV"
+      - name: Verify Gradle wrapper checksum
+        run: |
+          version=$(sed -n 's/^distributionUrl=.*gradle-\([0-9.]*\)-bin\.zip$/\1/p' gradle/wrapper/gradle-wrapper.properties)
+          expected=$(curl -fsSL "https://services.gradle.org/distributions/gradle-${version}-wrapper.jar.sha256")
+          echo "${expected}  gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
+      - name: Unit tests and Android Lint
+        run: ./gradlew --stacktrace :core:test :app:testReleaseUnitTest :app:lintRelease
+
+  device-test:
+    name: End-to-end test on Android 11 emulator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Select JDK 17
+        run: echo "JAVA_HOME=${JAVA_HOME_17_X64:-$JAVA_HOME}" >> "$GITHUB_ENV"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install emulator system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libpulse0 libnss3 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libxkbfile1 libgl1 libegl1 > /dev/null
+      - name: Run instrumented test (API 30)
+        run: bash tools/run-device-tests.sh
+
+  release:
+    name: Signed release
+    needs: [checks, device-test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select JDK 17
+        run: echo "JAVA_HOME=${JAVA_HOME_17_X64:-$JAVA_HOME}" >> "$GITHUB_ENV"
+      - name: Verify Gradle wrapper checksum
+        run: |
+          version=$(sed -n 's/^distributionUrl=.*gradle-\([0-9.]*\)-bin\.zip$/\1/p' gradle/wrapper/gradle-wrapper.properties)
+          expected=$(curl -fsSL "https://services.gradle.org/distributions/gradle-${version}-wrapper.jar.sha256")
+          echo "${expected}  gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
+
+      - name: Compute version
+        id: version
+        run: |
+          released=$(git tag --points-at HEAD --list 'v*' | head -n 1)
+          if [ -n "$released" ]; then
+            echo "This commit was already released as ${released}."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # versionCode must always increase so every update installs over the previous version:
+          # the number of commits on main, but never below the newest released code
+          # (release tags are vMAJOR.MINOR.CODE), even if the history is ever rewritten.
+          code=$(git rev-list --count HEAD)
+          last=$(git tag --list 'v*' | sed -n 's/^v[0-9]*\.[0-9]*\.\([0-9]*\)$/\1/p' | sort -n | tail -n 1)
+          if [ -n "$last" ] && [ "$code" -le "$last" ]; then code=$((last + 1)); fi
+          base=$(tr -d '[:space:]' < VERSION)
+          name="${base}.${code}"
+          {
+            echo "skip=false"
+            echo "code=${code}"
+            echo "name=${name}"
+            echo "tag=v${name}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version ${name} (versionCode ${code})"
+
+      - name: Check whether this version is already released
+        id: existing
+        if: steps.version.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $TAG already exists, nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore and verify signing key
+        if: steps.existing.outputs.skip == 'false'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Repository secrets ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD are required."
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.p12"
+          actual=$(keytool -list -v -keystore "$RUNNER_TEMP/release.p12" -storetype PKCS12 \
+            -storepass:env KEYSTORE_PASSWORD -alias androidwebcam | sed -n 's/^[[:space:]]*SHA256: //p' | head -n 1)
+          if [ "$actual" != "$EXPECTED_CERT_SHA256" ]; then
+            echo "::error::Keystore certificate fingerprint does not match EXPECTED_CERT_SHA256."
+            exit 1
+          fi
+          echo "Signing key verified."
+
+      - name: Build signed release APK
+        if: steps.existing.outputs.skip == 'false'
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.p12
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: androidwebcam
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: ./gradlew --stacktrace :app:assembleRelease -PawcVersionCode="$VERSION_CODE" -PawcVersionName="$VERSION_NAME"
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.p12"
+
+      - name: Verify APK signature and metadata
+        if: steps.existing.outputs.skip == 'false'
+        env:
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          "$bt/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt")
+          expected=$(echo "$EXPECTED_CERT_SHA256" | tr -d ':' | tr 'A-F' 'a-f')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::APK is not signed with the expected certificate."
+            exit 1
+          fi
+          badging=$("$bt/aapt2" dump badging "$apk" | head -n 1)
+          echo "$badging"
+          echo "$badging" | grep -q "versionCode='${VERSION_CODE}' versionName='${VERSION_NAME}'"
+
+      - name: Prepare release files
+        if: steps.existing.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: |
+          mkdir -p dist
+          apk="AndroidWebCam-${TAG}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "dist/${apk}"
+          (cd dist && sha256sum "${apk}" > SHA256SUMS.txt)
+          sha=$(cut -d ' ' -f 1 dist/SHA256SUMS.txt)
+          previous=$(git describe --tags --abbrev=0 --match 'v*' 2> /dev/null || true)
+          if [ -n "$previous" ]; then range="${previous}..HEAD"; else range="HEAD"; fi
+          {
+            echo "## Android WebCam ${TAG}"
+            echo
+            echo "下载 \`${apk}\` 直接安装；已安装旧版本时会覆盖升级（同一签名，versionCode ${VERSION_CODE}）。"
+            echo "Download \`${apk}\` and install it; it upgrades any previous version in place."
+            echo
+            echo "**校验 / Verify**"
+            echo "- APK SHA-256: \`${sha}\`"
+            echo "- 签名证书 SHA-256 / Signing certificate: \`${EXPECTED_CERT_SHA256}\`"
+            echo
+            echo "### 更新内容 / Changes"
+            git log --no-merges --pretty='- %s' "$range" | head -n 60
+          } > dist/notes.md
+          cat dist/notes.md
+
+      - name: Publish GitHub release
+        if: steps.existing.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" dist/*.apk dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Android WebCam ${TAG}" --notes-file dist/notes.md

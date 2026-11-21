@@ -1,0 +1,27 @@
+# Build outputs
+.gradle/
+.kotlin/
+build/
+captures/
+.cxx/
+.externalNativeBuild/
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Never commit signing material or binaries
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.der
+*.apk
+*.aab
+*.idsig
+
+# Test tooling
+node_modules/
