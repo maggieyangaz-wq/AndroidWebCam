@@ -133,7 +133,10 @@ install_apk() {
   echo "$out" | grep -q '^Success'
 }
 
-package_field() { "$ADB" shell dumpsys package "$1" | tr -d '\r' | grep -m1 -oE "$2=[^ ]+( [0-9:]+)?" | cut -d= -f2-; }
+package_field() {
+  "$ADB" shell dumpsys package "$1" 2> /dev/null | tr -d '\r' > "$WORK/dumpsys.txt" || true
+  { grep -oE "$2=[^ ]+( [0-9:]+)?" "$WORK/dumpsys.txt" | head -n 1 | cut -d= -f2-; } || true
+}
 
 fail() {
   echo "FAILED: $*"
@@ -168,10 +171,15 @@ instrument app.androidwebcam.StreamingDeviceTest || fail "functional end-to-end 
 
 # ------------------------------------------------------------------------------ 2
 log "2/3 Upgrade install keeps settings and TLS identity (debug 100 -> 101)"
+"$ADB" logcat -c || true
 instrument "app.androidwebcam.UpgradeDeviceTest#prepareBeforeUpgrade" -e upgradePhase prepare || fail "upgrade prepare"
+fingerprint=$({ "$ADB" logcat -d -s "System.out:I" 2> /dev/null | tr -d '\r' \
+  | grep -oE 'AWC-TEST upgrade-fingerprint=[0-9A-F:]+' | tail -n 1 | cut -d= -f2; } || true)
+[ -n "$fingerprint" ] || fail "certificate fingerprint before the upgrade not reported"
+echo "  certificate before upgrade: $fingerprint"
 install_apk -r "$WORK/debug-101.apk" || fail "in-place upgrade install (debug)"
 instrument "app.androidwebcam.UpgradeDeviceTest#verifyAfterUpgrade" -e upgradePhase verify -e expectedVersionCode 101 \
-  || fail "state after upgrade"
+  -e expectedFingerprint "$fingerprint" || fail "state after upgrade"
 
 # ------------------------------------------------------------------------------ 3
 log "3/3 Release build installs over the previous release; downgrade refused"

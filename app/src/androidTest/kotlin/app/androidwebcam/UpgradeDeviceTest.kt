@@ -19,7 +19,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.BufferedReader
-import java.io.File
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.security.MessageDigest
@@ -32,10 +31,11 @@ import javax.net.ssl.X509TrustManager
 
 /**
  * Upgrade-install test, driven by tools/run-device-tests.sh:
- *  1. install the old APK, run [prepareBeforeUpgrade] (settings + TLS identity are created);
+ *  1. install the old APK, run [prepareBeforeUpgrade] (settings + TLS identity are created; the
+ *     certificate fingerprint is logged and read back by the script);
  *  2. `adb install -r` the new APK over it (must succeed: same package and key, higher versionCode);
- *  3. run [verifyAfterUpgrade]: in-place update, settings kept, same TLS certificate (viewers
- *     see no new certificate warning after updates), streaming still works.
+ *  3. run [verifyAfterUpgrade] with that fingerprint: in-place update, settings kept, same TLS
+ *     certificate (viewers see no new certificate warning after updates), streaming still works.
  * Both tests are skipped in a normal test run.
  */
 @RunWith(AndroidJUnit4::class)
@@ -53,8 +53,6 @@ class UpgradeDeviceTest {
     private val phase = args.getString("upgradePhase")
     private val scale = args.getString("timeoutScale")?.toDoubleOrNull()?.coerceAtLeast(1.0) ?: 1.0
 
-    /** Lives in the test APK's own storage, so it survives the update of the app under test. */
-    private val record = File(instrumentation.context.filesDir, "upgrade-fingerprint.txt")
 
     private fun t(ms: Long): Long = (ms * scale).toLong()
 
@@ -63,8 +61,7 @@ class UpgradeDeviceTest {
         assumeTrue("run by tools/run-device-tests.sh only", phase == "prepare")
         SettingsStore(context).save(EXPECTED_SETTINGS)
         val fingerprint = streamOnce()
-        record.writeText(fingerprint)
-        println("AWC-TEST upgrade prepare: fingerprint $fingerprint")
+        println("AWC-TEST upgrade-fingerprint=$fingerprint") // read back by tools/run-device-tests.sh
     }
 
     @Test
@@ -75,7 +72,7 @@ class UpgradeDeviceTest {
         assertTrue("in-place update, not a fresh install", info.lastUpdateTime > info.firstInstallTime)
         assertEquals("settings survive the update", EXPECTED_SETTINGS, SettingsStore(context).load())
         val fingerprint = streamOnce()
-        assertEquals("TLS certificate survives the update", record.readText(), fingerprint)
+        assertEquals("TLS certificate survives the update", args.getString("expectedFingerprint"), fingerprint)
         println("AWC-TEST upgrade verify: versionCode ${info.longVersionCode}, settings and fingerprint kept")
     }
 
