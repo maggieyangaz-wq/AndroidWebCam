@@ -123,14 +123,14 @@ instrument() {
   local out
   out=$("$ADB" shell am instrument -w -e class "$target" -e timeoutScale "$TIMEOUT_SCALE" "$@" "$RUNNER" 2>&1 | tr -d '\r') || true
   echo "$out" | grep -vE '^\s*$' | tail -n 25
-  echo "$out" | grep -q '^OK ('
+  grep -q '^OK (' <<< "$out"
 }
 
 install_apk() {
   local out
   out=$("$ADB" install "$@" 2>&1 | tr -d '\r') || true
   echo "  adb install $*: $(echo "$out" | tail -n 1)"
-  echo "$out" | grep -q '^Success'
+  grep -q '^Success' <<< "$out"
 }
 
 package_field() {
@@ -184,7 +184,7 @@ instrument "app.androidwebcam.UpgradeDeviceTest#verifyAfterUpgrade" -e upgradePh
 # ------------------------------------------------------------------------------ 3
 log "3/3 Release build installs over the previous release; downgrade refused"
 export ANDROID_KEYSTORE_PASSWORD
-ANDROID_KEYSTORE_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)
+ANDROID_KEYSTORE_PASSWORD=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n') # no early-closing pipe (pipefail)
 keytool -genkeypair -storetype PKCS12 -keystore "$WORK/test.p12" -alias androidwebcam -keyalg EC -groupname secp256r1 \
   -validity 30 -dname "CN=Upgrade Test" -storepass "$ANDROID_KEYSTORE_PASSWORD" -keypass "$ANDROID_KEYSTORE_PASSWORD" > /dev/null 2>&1
 export ANDROID_KEYSTORE_FILE="$WORK/test.p12" ANDROID_KEY_ALIAS=androidwebcam
