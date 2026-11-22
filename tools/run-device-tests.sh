@@ -62,6 +62,11 @@ trap cleanup EXIT
 
 device_ready() { [ "$("$ADB" shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ]; }
 
+# Waits up to $1 seconds for an IPv4 address on the emulator's Wi-Fi interface.
+wifi_ready() {
+  timeout "$1" bash -c "until '$ADB' shell ip -4 addr show wlan0 2> /dev/null | grep -q 'inet '; do sleep 2; done"
+}
+
 prepare_device() {
   timeout 600 bash -c "until '$ADB' shell pm list packages > /dev/null 2>&1; do sleep 2; done"
   for s in window_animation_scale transition_animation_scale animator_duration_scale; do
@@ -69,9 +74,16 @@ prepare_device() {
   done
   "$ADB" shell settings put global verifier_verify_adb_installs 0 > /dev/null 2>&1 || true
   "$ADB" shell svc wifi enable > /dev/null 2>&1 || true
-  # The app only serves on LAN interfaces (Wi-Fi), never on the emulated mobile network.
-  timeout 180 bash -c "until '$ADB' shell ip -4 addr show wlan0 2> /dev/null | grep -q 'inet '; do sleep 2; done" \
-    || echo "warning: wlan0 has no IPv4 address"
+  # The app only serves on LAN interfaces (Wi-Fi), never on the emulated mobile network. After a
+  # cold boot or a snapshot restore the emulator does not always rejoin its virtual Wi-Fi by itself.
+  if ! wifi_ready 60; then
+    echo "  joining the emulator's Wi-Fi (AndroidWifi)"
+    "$ADB" shell cmd wifi connect-network AndroidWifi open > /dev/null 2>&1 || true
+    if ! wifi_ready 300; then
+      echo "The emulator's Wi-Fi did not connect (the app serves only on LAN interfaces)."
+      exit 1
+    fi
+  fi
   "$ADB" shell wm dismiss-keyguard > /dev/null 2>&1 || true
   "$ADB" shell input keyevent 82 > /dev/null 2>&1 || true
   for p in "$DEBUG_PKG" "$DEBUG_PKG.test" "$RELEASE_PKG"; do "$ADB" uninstall "$p" > /dev/null 2>&1 || true; done
@@ -108,6 +120,11 @@ boot_emulator() {
   if ! device_ready; then
     echo "The emulator did not finish booting in time."
     exit 1
+  fi
+  if [ "$fresh" = false ] && grep -q "Failed to load snapshot" "$LOG"; then
+    echo "  snapshot $SNAPSHOT could not be loaded (cold boot instead); it will be saved again"
+    "$ADB" emu avd snapshot delete "$SNAPSHOT" > /dev/null 2>&1 || true
+    fresh=true
   fi
   prepare_device
   if [ "$fresh" = true ]; then
