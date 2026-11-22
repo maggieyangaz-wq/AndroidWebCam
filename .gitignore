@@ -25,3 +25,6 @@ local.properties
 
 # Test tooling
 node_modules/
+
+# Local Workers runtime state (tools/run-relay-tests.sh)
+.wrangler/
