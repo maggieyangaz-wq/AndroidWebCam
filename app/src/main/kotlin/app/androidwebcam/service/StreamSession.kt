@@ -77,6 +77,11 @@ class StreamSession(
                         StreamController.update { it.copy(viewers = viewers) }
                         main.post { host.onViewerCountChanged(viewers.size, primaryUrl()) }
                     }
+
+                    override fun onSnapshot(address: String, client: String) {
+                        val record = SnapshotRecord(address, client, System.currentTimeMillis())
+                        StreamController.update { it.copy(snapshotCount = it.snapshotCount + 1, lastSnapshot = record) }
+                    }
                 },
                 logger,
             )

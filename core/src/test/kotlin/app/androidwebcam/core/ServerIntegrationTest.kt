@@ -25,17 +25,23 @@ class ServerIntegrationTest {
     private val access = AccessControl()
     private val allow = AtomicBoolean(true)
     private val hub = StreamHub(object : StreamHub.Listener {})
+    private val snapshots = java.util.concurrent.CopyOnWriteArrayList<String>()
     private lateinit var server: WebCamServer
     private lateinit var host: String
 
     @Before
     fun setUp() {
         server = WebCamServer(
-            WebCamServer.Options(port = 0, appVersion = "test", maxConnectionsPerAddress = 6, requestHeaderDeadlineMs = 500),
+            WebCamServer.Options(port = 0, appVersion = "test", maxConnectionsPerAddress = 6, requestHeaderDeadlineMs = 500, snapshotWaitMs = 1500),
             IdentityKeyManager(identity),
             access,
             hub,
             { _, _ -> allow.get() },
+            object : WebCamServer.Listener {
+                override fun onSnapshot(address: String, client: String) {
+                    snapshots.add("$address $client")
+                }
+            },
         )
         server.start()
         host = "127.0.0.1:${server.port}"
@@ -201,6 +207,63 @@ class ServerIntegrationTest {
             var n = 0
             while (n < 6) n += c.input.read(body, n, 6 - n)
             assertEquals(jpeg.toList(), body.toList())
+        }
+    }
+
+    @Test
+    fun snapshotReturnsOneFreshPictureToLoggedInClients() {
+        val cookie = connect().use { login(it) }
+        connect().use { c ->
+            assertEquals(401, c.request("GET", "/api/snapshot", host).status)
+            assertEquals(403, c.request("GET", "/api/snapshot", host, mapOf("Cookie" to cookie, "Sec-Fetch-Site" to "cross-site")).status)
+            // Only a picture published after the request counts (subscribing starts JPEG encoding).
+            hub.publishJpeg(byteArrayOf(1, 2, 3))
+            val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 7, 7, 0xFF.toByte(), 0xD9.toByte())
+            val publishing = java.util.concurrent.atomic.AtomicBoolean(true)
+            val publisher = Thread {
+                while (publishing.get()) {
+                    hub.publishJpeg(jpeg)
+                    Thread.sleep(50)
+                }
+            }.apply { start() }
+            val headers = mapOf("Cookie" to cookie, "User-Agent" to "AndroidWebCam-AI/1.0.0 (Linux)")
+            val r = c.request("GET", "/api/snapshot", host, headers)
+            publishing.set(false)
+            publisher.join()
+            assertEquals(200, r.status)
+            assertEquals("image/jpeg", r.header("content-type"))
+            assertEquals("no-store", r.header("cache-control"))
+            assertEquals(jpeg.toList(), r.body.toList())
+            assertEquals(listOf("127.0.0.1 Unknown"), snapshots) // client as described at login
+            assertEquals(0, hub.mjpegViewers) // JPEG encoding stops again
+            // At most one picture per second and address: not an unlimited extra stream.
+            val again = c.request("GET", "/api/snapshot", host, headers)
+            assertEquals(429, again.status)
+            assertEquals("1", again.header("retry-after"))
+        }
+    }
+
+    @Test
+    fun snapshotWithoutPictureFailsCleanly() {
+        val cookie = connect().use { login(it) }
+        connect().use { c ->
+            val r = c.request("GET", "/api/snapshot", host, mapOf("Cookie" to cookie))
+            assertEquals(503, r.status)
+            assertEquals(0, hub.mjpegViewers)
+        }
+    }
+
+    @Test
+    fun statusTellsLoggedInViewersTheKeyPinAndOffersTheAiBridge() {
+        val cookie = connect().use { login(it) }
+        connect().use { c ->
+            val status = c.request("GET", "/api/status", host, mapOf("Cookie" to cookie))
+            assertTrue(status.text.contains("\"pin\":\"${identity.publicKeyPin}\""))
+            assertTrue(status.text.contains("\"fingerprint\":\"${identity.fingerprintSha256}\""))
+            val bridge = c.request("GET", "/awc-ai.mjs", host)
+            assertEquals(200, bridge.status)
+            assertEquals("attachment; filename=\"awc-ai.mjs\"", bridge.header("content-disposition"))
+            assertTrue(bridge.text.contains("camera_snapshot"))
         }
     }
 

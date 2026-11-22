@@ -69,4 +69,31 @@ class CertificateAndTlsTest {
         } catch (expected: Exception) {
         }
     }
+
+    @Test
+    fun publicKeyPinCoversTheKeyNotTheCertificate() {
+        val first = TestSupport.softwareIdentity()
+        val spki = ServerIdentity.subjectPublicKeyInfo(first.certificate.encoded)
+        assertTrue("SPKI exactly as in the certificate", spki.contentEquals(first.certificate.publicKey.encoded))
+        assertTrue(first.publicKeyPin.matches(Regex("sha256/[A-Za-z0-9+/]{43}=")))
+        // A certificate re-issued for another LAN address with the same key keeps the pin.
+        val reissued = ServerIdentity(
+            first.privateKey,
+            SelfSignedCertificate.create(
+                first.certificate.publicKey,
+                SelfSignedCertificate.softwareSigner(first.privateKey),
+                listOf(InetAddress.getByName("192.168.1.23")),
+            ),
+            hardwareBacked = false,
+        )
+        assertEquals(first.publicKeyPin, reissued.publicKeyPin)
+        assertFalse(first.fingerprintSha256 == reissued.fingerprintSha256)
+        assertFalse(first.publicKeyPin == TestSupport.softwareIdentity().publicKeyPin)
+    }
+
+    @Test
+    fun aiToolIsDescribedAsSuch() {
+        assertEquals("AI tool · Windows", app.androidwebcam.core.server.UserAgents.describe("AndroidWebCam-AI/1.0.0 (Windows)"))
+        assertEquals("AI tool · macOS", app.androidwebcam.core.server.UserAgents.describe("AndroidWebCam-AI/1.0.0 (Macintosh)"))
+    }
 }

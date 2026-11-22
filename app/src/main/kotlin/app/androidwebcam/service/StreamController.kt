@@ -13,6 +13,9 @@ enum class Phase { IDLE, STARTING, RUNNING, ERROR }
 
 enum class ErrorKind { CAMERA_PERMISSION, PORT_IN_USE, NO_CAMERA, CAMERA, ENCODER, OTHER }
 
+/** The latest single picture taken by a logged-in client such as an AI tool (/api/snapshot). */
+data class SnapshotRecord(val address: String, val client: String, val atEpochMs: Long)
+
 data class StreamState(
     val phase: Phase = Phase.IDLE,
     val error: ErrorKind? = null,
@@ -36,6 +39,8 @@ data class StreamState(
     val zoomMax: Float = 1f,
     val zoom: Float = 1f,
     val alerts: List<String> = emptyList(),
+    val snapshotCount: Int = 0,
+    val lastSnapshot: SnapshotRecord? = null,
 )
 
 /**

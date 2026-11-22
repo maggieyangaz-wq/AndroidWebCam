@@ -11,6 +11,7 @@ import android.view.WindowManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
+import app.androidwebcam.core.tls.ServerIdentity
 import app.androidwebcam.service.Phase
 import app.androidwebcam.service.StreamController
 import app.androidwebcam.service.StreamState
@@ -155,6 +156,28 @@ class StreamingDeviceTest {
                 val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
                 log("mjpeg ${bitmap.width}x${bitmap.height}")
                 assertTrue("MJPEG must be portrait like the H.264 stream", bitmap.height > bitmap.width)
+            }
+
+            // Single picture for AI tools on a computer: logged-in clients only, a real portrait JPEG,
+            // and the phone lists it. The key pin offered to the AI tool matches the TLS key.
+            connect(tls, host, state.port).use { c ->
+                assertEquals(401, c.request("GET", "/api/snapshot", authority).status)
+                val r = c.request("GET", "/api/snapshot", authority, mapOf("Cookie" to cookie, "User-Agent" to "AndroidWebCam-AI/1.0.0 (Linux)"))
+                assertEquals(200, r.status)
+                assertEquals("image/jpeg", r.header("content-type"))
+                val bitmap = BitmapFactory.decodeByteArray(r.body, 0, r.body.size)
+                log("snapshot ${bitmap.width}x${bitmap.height}")
+                assertTrue("snapshot must be portrait like the stream", bitmap.height > bitmap.width)
+                val last = StreamController.state.value.lastSnapshot
+                assertEquals(host, last?.address)
+                assertTrue(StreamController.state.value.snapshotCount >= 1)
+
+                val certificate = c.socket.session.peerCertificates[0] as X509Certificate
+                val spki = ServerIdentity.subjectPublicKeyInfo(certificate.encoded)
+                val pin = "sha256/" + Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(spki))
+                val status = c.request("GET", "/api/status", authority, mapOf("Cookie" to cookie))
+                assertTrue("status must offer the key pin $pin: ${status.text}", status.text.contains("\"pin\":\"$pin\""))
+                assertEquals(200, c.request("GET", "/awc-ai.mjs", authority).status)
             }
 
             assertTrue(StreamController.state.value.viewers.isEmpty() || StreamController.state.value.phase == Phase.RUNNING)

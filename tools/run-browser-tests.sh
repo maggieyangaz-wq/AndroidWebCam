@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Browser end-to-end test of the viewer page against the JVM dev server (no phone needed).
+# Browser end-to-end test of the viewer page, and of the AI bridge (MCP server), against the JVM
+# dev server (no phone needed).
 # Needs ffmpeg (libx264) and Node with Playwright + Chromium.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -31,3 +32,4 @@ if [ ! -s "$WORK/info.json" ]; then
   exit 1
 fi
 node tools/viewer-e2e.cjs "$PORT" "$WORK/info.json" "${SCREENSHOT_DIR:-$WORK}"
+node tools/ai-bridge-e2e.mjs "$PORT" "$WORK/info.json" "${SCREENSHOT_DIR:-$WORK}"

@@ -36,11 +36,39 @@
     <span class="badge">&#9679; <span data-i18n="live">LIVE</span></span>
     <span id="stats"></span>
     <span class="spacer"></span>
+    <button id="btn-ai" type="button" data-i18n-title="aiOpen" title="Let an AI see the picture">&#129302;</button>
     <button id="btn-snapshot" type="button" data-i18n-title="snapshot" title="Snapshot">&#128247;</button>
     <button id="btn-fullscreen" type="button" data-i18n-title="fullscreen" title="Fullscreen">&#x26F6;</button>
     <button id="btn-logout" type="button" data-i18n-title="logout" title="Disconnect">&#x23CF;</button>
   </div>
 </main>
+<section id="ai-panel" class="sheet" hidden aria-labelledby="ai-title">
+  <div class="sheet-body">
+    <button id="ai-close" type="button" class="close" data-i18n-title="close" title="Close">&#x2715;</button>
+    <h2 id="ai-title" data-i18n="aiTitle">Let an AI see the picture</h2>
+    <p data-i18n="aiIntro">An AI app on a computer in this network can take one current picture from the phone whenever you ask it.</p>
+    <ol>
+      <li>
+        <span data-i18n="aiStep1">Download the connection tool (needs Node.js 18 or newer):</span>
+        <a id="ai-download" href="/awc-ai.mjs" download="awc-ai.mjs">awc-ai.mjs</a>
+      </li>
+      <li>
+        <span data-i18n="aiStepDesktop">Claude Desktop: Settings → Developer → Edit Config. Add this to claude_desktop_config.json and correct the path to awc-ai.mjs:</span>
+        <pre id="ai-config-desktop" class="code"></pre>
+        <button type="button" class="copy" data-copy="ai-config-desktop" data-i18n="copy">Copy</button>
+      </li>
+      <li>
+        <span data-i18n="aiStepCode">Or Claude Code: run this in a terminal (correct the path):</span>
+        <pre id="ai-config-code" class="code"></pre>
+        <button type="button" class="copy" data-copy="ai-config-code" data-i18n="copy">Copy</button>
+      </li>
+      <li data-i18n="aiStepAsk">Restart the AI app and ask, for example: "What does the camera see right now?" The first time it asks for the access code shown on the phone (a new code every time streaming starts).</li>
+    </ol>
+    <p class="note"><span data-i18n="aiCheck">Test the connection without an AI (replace the access code):</span></p>
+    <pre id="ai-check" class="code"></pre>
+    <p class="note" data-i18n="aiPrivacy">The phone itself never uploads anything. The tool connects only to this phone (its key is pinned), takes a picture only when the AI asks, and the phone lists every picture taken. The pictures are sent to the AI service you use.</p>
+  </div>
+</section>
 <noscript>JavaScript is required to view the stream.</noscript>
 </body>
 </html>

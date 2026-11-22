@@ -79,6 +79,7 @@
     <string name="kind_ethernet">以太网</string>
     <string name="kind_other">局域网</string>
     <string name="label_qr_for">二维码对应</string>
+    <string name="snapshot_line">已被取走单张画面 %1$d 次，最近一次 %2$s，来自 %3$s（%4$s）</string>
     <string name="section_keep_alive">保持推流不中断</string>
     <string name="keep_awake_label">推流时保持亮屏（1 分钟无操作自动黑屏）</string>
     <string name="keep_awake_desc">推荐开启。一加/OxygenOS 等系统会在熄屏较久后结束后台应用。开启后屏幕保持常亮但全黑、亮度最低，推流不会被系统结束；轻点两下即可返回。推流时请不要按电源键锁屏。注意：开启期间手机不会自动锁屏，请把手机放在可信的地方。</string>

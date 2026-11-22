@@ -12,7 +12,7 @@ import java.io.File
 
 /**
  * Development server used for browser end-to-end tests of the viewer. Only loopback
- * clients are accepted. Writes {"code": ..., "pair": ..., "fingerprint": ...} to the info file.
+ * clients are accepted. Writes {"code": ..., "pair": ..., "fingerprint": ..., "pin": ...} to the info file.
  */
 fun main(args: Array<String>) {
     require(args.size == 4) { "usage: <port> <file.h264> <jpegDir> <infoJsonOut>" }
@@ -31,7 +31,8 @@ fun main(args: Array<String>) {
     )
     server.start()
     File(args[3]).writeText(
-        "{\"code\":\"${access.displayCode}\",\"pair\":\"${access.issuePairingToken()}\",\"fingerprint\":\"${identity.fingerprintSha256}\"}",
+        "{\"code\":\"${access.displayCode}\",\"pair\":\"${access.issuePairingToken()}\",\"fingerprint\":\"${identity.fingerprintSha256}\"," +
+            "\"pin\":\"${identity.publicKeyPin}\"}",
     )
     println("dev server on https://127.0.0.1:$port  code=${access.displayCode}")
 

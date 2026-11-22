@@ -38,4 +38,14 @@ button:disabled { opacity: .6; cursor: default; }
 .badge { color: var(--danger); font-weight: 700; letter-spacing: .05em; white-space: nowrap; }
 .spacer { flex: 1; }
 body.immersive #toolbar { display: none; }
-.toast { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); background: rgba(20, 27, 36, .95); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: 90vw; z-index: 10; }
+.sheet { position: fixed; inset: 0; z-index: 20; overflow: auto; background: rgba(11, 15, 20, .97); }
+.sheet-body { position: relative; max-width: 760px; margin: 0 auto; padding: 24px 20px 40px; line-height: 1.5; font-size: 15px; }
+.sheet h2 { font-size: 20px; margin: 4px 40px 12px 0; }
+.sheet a { color: var(--accent); font-weight: 600; }
+.sheet ol { padding-left: 22px; }
+.sheet li { margin: 14px 0; }
+.sheet .close { position: absolute; right: 12px; top: 12px; background: transparent; color: var(--text); font-size: 20px; padding: 6px 10px; }
+.code { margin: 8px 0; padding: 10px 12px; border: 1px solid #2a3644; border-radius: 8px; background: #0f151c; color: var(--text);
+  font: 12.5px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; user-select: all; }
+.copy { font-size: 14px; padding: 6px 14px; }
+.toast { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); background: rgba(20, 27, 36, .95); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: 90vw; z-index: 30; }

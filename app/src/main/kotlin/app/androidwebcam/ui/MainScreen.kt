@@ -320,6 +320,14 @@ private fun ViewersCard(state: StreamState) {
         for (viewer in state.viewers) {
             Text(stringResource(R.string.viewer_line, viewer.address, viewer.client, viewer.mode), fontFamily = FontFamily.Monospace, fontSize = 13.sp)
         }
+        state.lastSnapshot?.let { last ->
+            // Single pictures (e.g. taken by an AI tool) are listed too: nothing is taken unnoticed.
+            val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(last.atEpochMs))
+            Text(
+                stringResource(R.string.snapshot_line, state.snapshotCount, time, last.address, last.client),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         OutlinedButton(onClick = { StreamController.disconnectAllAndRotateCode() }, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.action_disconnect_all))
         }

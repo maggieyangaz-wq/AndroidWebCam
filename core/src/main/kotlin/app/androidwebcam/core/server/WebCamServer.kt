@@ -37,7 +37,8 @@ import javax.net.ssl.SSLSocket
 /**
  * The phone-side HTTPS server (TLS 1.3 only). It serves the viewer page, handles
  * authentication and streams H.264 over WebSocket (decoded by WebCodecs in the browser)
- * or MJPEG as a fallback. Every request is checked for:
+ * or MJPEG as a fallback; single pictures (/api/snapshot) serve AI tools on a computer
+ * in the same network. Every request is checked for:
  *  - allowed network path (decided by [ConnectionPolicy] before the TLS handshake);
  *  - a Host header naming this server's IP:port (DNS-rebinding defense);
  *  - Origin on state-changing requests and WebSocket upgrades (CSRF / CSWSH defense);
@@ -62,6 +63,10 @@ class WebCamServer(
         val requestHeaderDeadlineMs: Long = 10_000,
         val appVersion: String = "dev",
         val mjpegAvailable: Boolean = true,
+        /** How long a snapshot request waits for the next picture. */
+        val snapshotWaitMs: Long = 10_000,
+        /** Minimum time between two snapshots for one network address. */
+        val snapshotIntervalMs: Long = 1_000,
     )
 
     fun interface ConnectionPolicy {
@@ -72,6 +77,8 @@ class WebCamServer(
     interface Listener {
         fun onViewersChanged(viewers: List<Viewer>) {}
         fun onConnectionRejected(remote: String) {}
+        /** A logged-in client (e.g. an AI tool) took a single picture. */
+        fun onSnapshot(address: String, client: String) {}
     }
 
     data class Viewer(val id: Int, val address: String, val client: String, val mode: String, val sinceEpochMs: Long)
@@ -95,6 +102,7 @@ class WebCamServer(
     private val viewers = ConcurrentHashMap<Int, Viewer>()
     private val viewerSockets = ConcurrentHashMap<Int, Socket>()
     private val viewerSeq = AtomicInteger(1)
+    private val lastSnapshot = ConcurrentHashMap<InetAddress, Long>()
     private val watchdog = WriteWatchdog()
     private val assets = StaticAssets.load()
 
@@ -137,6 +145,7 @@ class WebCamServer(
         watchdog.stop()
         viewers.clear()
         viewerSockets.clear()
+        lastSnapshot.clear()
         listener.onViewersChanged(emptyList())
     }
 
@@ -240,6 +249,7 @@ class WebCamServer(
         return when (val path = x.request.path) {
             "/", "/index.html" -> onlyGet(x) { serveAsset(x, "index.html") }
             "/app.js", "/style.css", "/favicon.svg" -> onlyGet(x) { serveAsset(x, path.substring(1)) }
+            "/$AI_BRIDGE" -> onlyGet(x) { serveAsset(x, AI_BRIDGE, download = true) }
             "/robots.txt" -> onlyGet(x) { respond(x, HttpResponse(200).text("User-agent: *\nDisallow: /\n")) }
             "/api/status" -> onlyGet(x) { status(x) }
             "/api/login" -> onlyPost(x) { login(x) }
@@ -247,6 +257,7 @@ class WebCamServer(
             "/api/logout" -> onlyPost(x) { logout(x) }
             "/ws" -> onlyGet(x) { websocket(x) }
             "/mjpeg" -> onlyGet(x) { mjpeg(x) }
+            "/api/snapshot" -> onlyGet(x) { snapshot(x) }
             else -> if (method == "GET" || method == "POST") respond(x, error(404)) else respond(x, error(405).header("Allow", "GET, POST"))
         }
     }
@@ -259,9 +270,11 @@ class WebCamServer(
 
     // ---------------------------------------------------------------- handlers
 
-    private fun serveAsset(x: Exchange, name: String): Boolean {
+    private fun serveAsset(x: Exchange, name: String, download: Boolean = false): Boolean {
         val asset = assets[name] ?: return respond(x, error(404))
-        return respond(x, HttpResponse(200).body(asset.bytes, asset.contentType))
+        val response = HttpResponse(200).body(asset.bytes, asset.contentType)
+        if (download) response.header("Content-Disposition", "attachment; filename=\"$name\"")
+        return respond(x, response)
     }
 
     private fun status(x: Exchange): Boolean {
@@ -272,6 +285,7 @@ class WebCamServer(
             "width" to cfg.width.toString(),
             "height" to cfg.height.toString(),
         )
+        val identity = keyManager.identity
         val json = Json.obj(
             "app" to Json.quote("Android WebCam"),
             "version" to Json.quote(options.appVersion),
@@ -279,6 +293,9 @@ class WebCamServer(
             "mjpeg" to options.mjpegAvailable.toString(),
             "viewers" to viewers.size.toString(),
             "maxViewers" to options.maxViewers.toString(),
+            // For the AI tool setup shown to logged-in viewers (both values are public).
+            "fingerprint" to Json.quote(identity.fingerprintSha256),
+            "pin" to Json.quote(identity.publicKeyPin),
         )
         return respond(x, HttpResponse(200).json(json))
     }
@@ -466,6 +483,41 @@ class WebCamServer(
         return false
     }
 
+    /**
+     * One current picture as JPEG (rotated like the stream, never mirrored), for AI tools on a
+     * computer in the same network. Same session rules as the video; at most one picture per
+     * second per address, so it cannot be used as an unlimited extra stream.
+     */
+    private fun snapshot(x: Exchange): Boolean {
+        val session = authenticate(x) ?: return respond(x, unauthorized())
+        if (!options.mjpegAvailable) return respond(x, error(404))
+        val site = x.request.header("sec-fetch-site")
+        if (site != null && site != "same-origin") return respond(x, error(403))
+        val now = monotonicMillis()
+        var allowed = false
+        lastSnapshot.compute(x.remote) { _, last ->
+            if (last == null || now - last >= options.snapshotIntervalMs) {
+                allowed = true
+                now
+            } else {
+                last
+            }
+        }
+        if (!allowed) {
+            return respond(x, HttpResponse(429).header("Retry-After", "1").json(Json.obj("error" to Json.quote("too-fast"))))
+        }
+        if (lastSnapshot.size > 256) lastSnapshot.entries.removeIf { now - it.value > options.snapshotIntervalMs }
+        // Subscribing starts JPEG encoding if no MJPEG viewer is connected; the next picture is fresh.
+        val subscription = hub.subscribeMjpeg()
+        val jpeg = try {
+            subscription.next(options.snapshotWaitMs)
+        } finally {
+            subscription.close()
+        } ?: return respond(x, HttpResponse(503).header("Retry-After", "2").json(Json.obj("error" to Json.quote("no-picture"))))
+        listener.onSnapshot(x.remote.hostAddress ?: "?", session.client)
+        return respond(x, HttpResponse(200).body(jpeg, "image/jpeg"))
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private fun authenticate(x: Exchange): AccessControl.Session? =
@@ -566,6 +618,8 @@ class WebCamServer(
     }
 
     companion object {
+        /** Zero-dependency MCP server for AI clients on a computer (see README). */
+        const val AI_BRIDGE = "awc-ai.mjs"
         private const val BOUNDARY = "awcframe"
         private val CRLF = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte())
         const val HANDSHAKE_TIMEOUT_MS = 10_000

@@ -26,6 +26,17 @@ object UserAgents {
     /** Coarse, privacy-friendly description such as "Chrome · Windows". */
     fun describe(userAgent: String?): String {
         val ua = userAgent ?: return "Unknown"
+        if (ua.startsWith("AndroidWebCam-AI/")) {
+            // The AI bridge on a computer (awc-ai.mjs): "AndroidWebCam-AI/1.0.0 (Windows)".
+            val platform = ua.substringAfter('(', "").substringBefore(')')
+            val os = when {
+                "Windows" in platform -> "Windows"
+                "Macintosh" in platform -> "macOS"
+                "Linux" in platform -> "Linux"
+                else -> ""
+            }
+            return if (os.isEmpty()) "AI tool" else "AI tool · $os"
+        }
         val browser = when {
             "Edg/" in ua || "EdgA/" in ua || "EdgiOS/" in ua -> "Edge"
             "OPR/" in ua -> "Opera"
@@ -114,6 +125,7 @@ internal class StaticAssets private constructor(private val files: Map<String, A
             "app.js" to "text/javascript; charset=utf-8",
             "style.css" to "text/css; charset=utf-8",
             "favicon.svg" to "image/svg+xml",
+            WebCamServer.AI_BRIDGE to "text/javascript; charset=utf-8",
         )
 
         fun load(): StaticAssets = StaticAssets(TYPES.mapValues { (name, type) -> Asset(read("/web/$name"), type) })

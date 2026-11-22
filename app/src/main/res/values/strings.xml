@@ -81,6 +81,7 @@
     <string name="kind_ethernet">Ethernet</string>
     <string name="kind_other">Local network</string>
     <string name="label_qr_for">QR code for</string>
+    <string name="snapshot_line">Single pictures taken: %1$d, last at %2$s by %3$s (%4$s)</string>
     <string name="section_keep_alive">Keep streaming without interruption</string>
     <string name="keep_awake_label">Keep the screen on while streaming (goes black after 1 minute without touch)</string>
     <string name="keep_awake_desc">Recommended. Some systems (e.g. OnePlus/OxygenOS) end background apps after the screen has been off for a while. With this on, the screen stays on but black at the lowest brightness and streaming is never ended by the system. Double-tap to return. Don\'t lock the phone with the power button while streaming. Note: the phone does not lock itself while this is on, so keep it in a trusted place.</string>

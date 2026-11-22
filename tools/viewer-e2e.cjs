@@ -133,6 +133,32 @@ async function waitForPicture(page) {
       check('no script errors in WebSocket fallback', problems.length === 0, problems.join(' | '));
       await context.close();
     }
+
+    // 5) "Let an AI see" panel: ready-made settings with this phone's address and key pin.
+    {
+      const { context, page, problems } = await newPage(browser, { locale: 'zh-CN' });
+      await loginWithCode(page, info.code);
+      await page.click('#btn-ai');
+      await page.waitForSelector('#ai-panel:not([hidden])');
+      check('AI panel in Chinese', (await page.textContent('#ai-title')).includes('让 AI'));
+      const server = JSON.parse(await page.textContent('#ai-config-desktop')).mcpServers['android-webcam'];
+      check('AI panel: Claude Desktop config with address and key pin',
+        server.command === 'node' && server.env.AWC_ADDRESS === `127.0.0.1:${port}` && server.env.AWC_PIN === info.pin,
+        JSON.stringify(server.env));
+      const command = await page.textContent('#ai-config-code');
+      check('AI panel: Claude Code command', command.startsWith('claude mcp add android-webcam') && command.includes(info.pin), command);
+      const download = await page.evaluate(async () => {
+        const r = await fetch(document.getElementById('ai-download').href);
+        return { status: r.status, disposition: r.headers.get('content-disposition'), text: await r.text() };
+      });
+      check('AI panel: connection tool download',
+        download.status === 200 && /attachment/.test(download.disposition) && download.text.includes('camera_snapshot'), download.disposition);
+      await page.screenshot({ path: `${outDir}/viewer-ai-panel.png` });
+      await page.click('#ai-close');
+      check('AI panel closes', await page.isHidden('#ai-panel'));
+      check('no CSP violations in the AI panel', problems.length === 0, problems.join(' | '));
+      await context.close();
+    }
   } finally {
     await browser.close();
   }
