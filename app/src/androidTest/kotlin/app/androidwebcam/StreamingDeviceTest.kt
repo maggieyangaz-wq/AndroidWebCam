@@ -212,6 +212,69 @@ class StreamingDeviceTest {
         }
     }
 
+    /**
+     * Tapping "Stop" while viewers are watching (H.264 and MJPEG) and pictures are being taken must
+     * stop cleanly: no crash, the activity stays usable and shows the idle state.
+     */
+    @Test
+    fun stopWhileViewersWatchDoesNotCrash() {
+        SettingsStore(context).save(StreamSettings(quality = Quality.P720, fps = 15, orientation = 0, port = 8443))
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val main = launchMainActivity(t(60_000))
+        val workers = ArrayList<Thread>()
+        val clients = java.util.concurrent.CopyOnWriteArrayList<Client>()
+        try {
+            instrumentation.runOnMainSync { StreamingService.start(main) }
+            val state = waitFor(t(90_000)) {
+                StreamController.state.value.takeIf { it.phase == Phase.RUNNING && it.endpoints.isNotEmpty() && it.streamWidth > 0 }
+            }
+            val host = state.endpoints.first().address.hostAddress!!
+            val authority = "$host:${state.port}"
+            val tls = pinnedContext(state.fingerprint!!)
+            val cookie = connect(tls, host, state.port).use { c ->
+                c.request("POST", "/api/login", authority, json(authority), "{\"code\":\"${state.accessCode}\"}").header("set-cookie")!!.substringBefore(';')
+            }
+            val ws = connect(tls, host, state.port).also(clients::add)
+            ws.send(
+                "GET /ws HTTP/1.1\r\nHost: $authority\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+                    "Origin: https://$authority\r\nCookie: $cookie\r\n\r\n",
+            )
+            assertEquals(101, ws.readHead().status)
+            val mjpeg = connect(tls, host, state.port).also(clients::add)
+            mjpeg.send("GET /mjpeg HTTP/1.1\r\nHost: $authority\r\nCookie: $cookie\r\n\r\n")
+            assertEquals(200, mjpeg.readHead().status)
+            // Keep both viewers reading, and keep taking single pictures, until the server goes away.
+            workers += Thread { try { while (true) ws.readWsFrame() } catch (_: Throwable) {} }
+            workers += Thread { try { while (true) mjpeg.readLine() } catch (_: Throwable) {} }
+            workers += Thread {
+                try {
+                    while (true) {
+                        connect(tls, host, state.port).also(clients::add).use { it.request("GET", "/api/snapshot", authority, mapOf("Cookie" to cookie)) }
+                        Thread.sleep(1_000)
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+            workers.forEach { it.isDaemon = true; it.start() }
+            waitFor(t(30_000)) { StreamController.state.value.takeIf { it.viewers.size >= 2 } }
+            Thread.sleep(t(3_000))
+            log("stopping with ${StreamController.state.value.viewers.size} viewers")
+
+            instrumentation.runOnMainSync { StreamingService.stop(main) } // what the Stop button does
+            waitFor(t(30_000)) { StreamController.state.value.takeIf { it.phase == Phase.IDLE } }
+            Thread.sleep(t(5_000)) // late callbacks (server threads, GL thread, notifications)
+            var alive = false
+            instrumentation.runOnMainSync { alive = !main.isDestroyed && !main.isFinishing }
+            assertTrue("activity must survive stopping", alive)
+            assertEquals(Phase.IDLE, StreamController.state.value.phase)
+            log("stopped cleanly with viewers connected")
+        } finally {
+            clients.forEach { runCatching { it.close() } }
+            instrumentation.runOnMainSync { main.finish() }
+        }
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private fun log(message: String) = println("AWC-TEST $message")

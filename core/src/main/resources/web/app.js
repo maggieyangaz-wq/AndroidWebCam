@@ -197,6 +197,7 @@
     $('btn-logout').addEventListener('click', logout);
     $('btn-ai').addEventListener('click', openAiPanel);
     $('ai-create-key').addEventListener('click', createAiKey);
+    $('ai-download').addEventListener('click', downloadBridge);
     $('ai-close').addEventListener('click', () => { $('ai-panel').hidden = true; });
     document.querySelectorAll('[data-copy]').forEach((button) => button.addEventListener('click', () => copyText(button)));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('ai-panel').hidden = true; });
@@ -480,14 +481,7 @@
     canvas.height = height;
     canvas.getContext('2d').drawImage(source, 0, 0, width, height);
     canvas.toBlob((blob) => {
-      if (!blob) return;
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = 'androidwebcam-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+      if (blob) saveBlob(blob, 'androidwebcam-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png');
     }, 'image/png');
   }
 
@@ -560,6 +554,32 @@
       },
     }, null, 2);
     $('ai-node-command').textContent = 'node "' + path + '" snap --address ' + address + ' --pin "' + pin + '" --key ' + key;
+  }
+
+  /**
+   * Fetches the tool over the page's own (already accepted) connection and saves it from memory:
+   * browsers may fail a direct download from a server with a self-signed certificate
+   * ("network error") although the page itself works.
+   */
+  async function downloadBridge(event) {
+    event.preventDefault();
+    try {
+      const r = await fetch('/awc-ai.mjs', { cache: 'no-store', credentials: 'same-origin' });
+      if (!r.ok) { toast(t('error', r.status)); return; }
+      saveBlob(new Blob([await r.arrayBuffer()], { type: 'application/octet-stream' }), 'awc-ai.mjs');
+    } catch (e) {
+      toast(t('network'));
+    }
+  }
+
+  function saveBlob(blob, name) {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
   }
 
   async function copyText(button) {

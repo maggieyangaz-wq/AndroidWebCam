@@ -238,7 +238,11 @@ class WebCamServer(
             }
         } catch (_: SocketTimeoutException) {
         } catch (_: IOException) {
-        } catch (e: RuntimeException) {
+        } catch (_: InterruptedException) {
+            // stop() interrupts connections that wait for the next picture: just end this one.
+            // (Escaping this thread, the exception would end the whole app.)
+            Thread.currentThread().interrupt()
+        } catch (e: Exception) {
             logger.w("connection failed", e)
         } finally {
             sockets.remove(socket)

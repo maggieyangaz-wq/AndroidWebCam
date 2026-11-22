@@ -137,7 +137,7 @@ async function waitForPicture(page) {
     // 5) "Let an AI see" panel: an AI key for this computer and instructions any agent can follow
     //    (one curl command, pinned to the phone's key), run here with the real curl.
     {
-      const { context, page, problems } = await newPage(browser, { locale: 'zh-CN' });
+      const { context, page, problems } = await newPage(browser, { locale: 'zh-CN', acceptDownloads: true });
       await loginWithCode(page, info.code);
       await page.click('#btn-ai');
       await page.waitForSelector('#ai-panel:not([hidden])');
@@ -165,12 +165,13 @@ async function waitForPicture(page) {
         server.command === 'node' && server.env.AWC_ADDRESS === `127.0.0.1:${port}` && server.env.AWC_PIN === info.pin &&
         /^awc_/.test(server.env.AWC_KEY), JSON.stringify(server.env).replace(/awc_[^"]+/, 'awc_…'));
       check('Node command for Windows 10', (await page.textContent('#ai-node-command')).includes(' snap --address '));
-      const download = await page.evaluate(async () => {
-        const r = await fetch(document.getElementById('ai-download').href);
-        return { status: r.status, disposition: r.headers.get('content-disposition'), text: await r.text() };
-      });
-      check('AI panel: connection tool download',
-        download.status === 200 && /attachment/.test(download.disposition) && download.text.includes('camera_snapshot'), download.disposition);
+      // The tool is fetched over the page's own connection and saved from memory (blob): browsers
+      // may fail direct downloads from a self-signed server although the page works.
+      await page.click('#ai-panel summary');
+      const [saved] = await Promise.all([page.waitForEvent('download'), page.click('#ai-download')]);
+      const savedText = fs.readFileSync(await saved.path(), 'utf8');
+      check('AI panel: connection tool saved from memory',
+        saved.url().startsWith('blob:') && saved.suggestedFilename() === 'awc-ai.mjs' && savedText.includes('camera_snapshot'), saved.url());
       await page.screenshot({ path: `${outDir}/viewer-ai-panel.png`, fullPage: true });
       await page.click('#ai-close');
       check('AI panel closes', await page.isHidden('#ai-panel'));
