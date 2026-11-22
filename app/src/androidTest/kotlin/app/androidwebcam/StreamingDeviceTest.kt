@@ -1,7 +1,6 @@
 package app.androidwebcam
 
 import android.Manifest
-import android.content.Intent
 import android.graphics.BitmapFactory
 import android.media.MediaCodec
 import android.media.MediaFormat
@@ -68,12 +67,9 @@ class StreamingDeviceTest {
     fun streamsOverTls13OnTheLocalNetwork() {
         SettingsStore(context).save(StreamSettings(quality = Quality.P720, fps = 15, orientation = 0, port = 8443))
         // Start the service while the activity is in the foreground (Android 11 camera rules).
-        // startActivitySync has no fixed launch timeout (slow, software-emulated devices).
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val activity = instrumentation.startActivitySync(
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-        val main = activity as MainActivity
+        val main = launchMainActivity(t(60_000))
+        val activity = main
         try {
             instrumentation.runOnMainSync {
                 main.autoBlackoutDelayMs = t(3_000) // instead of 1 minute without touch

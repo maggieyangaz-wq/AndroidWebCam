@@ -1,7 +1,6 @@
 package app.androidwebcam
 
 import android.Manifest
-import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -78,9 +77,7 @@ class UpgradeDeviceTest {
 
     /** Starts streaming from the foreground, checks that HTTPS answers, stops; returns the fingerprint. */
     private fun streamOnce(): String {
-        val activity = instrumentation.startActivitySync(
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
+        val activity = launchMainActivity(t(60_000))
         try {
             instrumentation.runOnMainSync { StreamingService.start(activity) }
             val state = waitFor(t(90_000)) {
