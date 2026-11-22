@@ -3,6 +3,7 @@ package app.androidwebcam.core.server
 import app.androidwebcam.core.Json
 import app.androidwebcam.core.Logger
 import app.androidwebcam.core.auth.AccessControl
+import app.androidwebcam.core.auth.AiKeys
 import app.androidwebcam.core.auth.LoginResult
 import app.androidwebcam.core.http.HttpException
 import app.androidwebcam.core.http.HttpParser
@@ -52,6 +53,8 @@ class WebCamServer(
     private val policy: ConnectionPolicy,
     private val listener: Listener = object : Listener {},
     private val logger: Logger = Logger.NONE,
+    /** AI access keys for single pictures (persisted by the app across streaming sessions). */
+    private val aiKeys: AiKeys = AiKeys(),
 ) {
     data class Options(
         val port: Int,
@@ -79,6 +82,8 @@ class WebCamServer(
         fun onConnectionRejected(remote: String) {}
         /** A logged-in client (e.g. an AI tool) took a single picture. */
         fun onSnapshot(address: String, client: String) {}
+        /** A logged-in viewer created an AI access key for [address]. */
+        fun onAiKeyCreated(address: String) {}
     }
 
     data class Viewer(val id: Int, val address: String, val client: String, val mode: String, val sinceEpochMs: Long)
@@ -258,6 +263,7 @@ class WebCamServer(
             "/ws" -> onlyGet(x) { websocket(x) }
             "/mjpeg" -> onlyGet(x) { mjpeg(x) }
             "/api/snapshot" -> onlyGet(x) { snapshot(x) }
+            "/api/ai-key" -> onlyPost(x) { createAiKey(x) }
             else -> if (method == "GET" || method == "POST") respond(x, error(404)) else respond(x, error(405).header("Allow", "GET, POST"))
         }
     }
@@ -489,7 +495,16 @@ class WebCamServer(
      * second per address, so it cannot be used as an unlimited extra stream.
      */
     private fun snapshot(x: Exchange): Boolean {
-        val session = authenticate(x) ?: return respond(x, unauthorized())
+        // Either an AI access key (agents, e.g. curl) or a viewer session cookie.
+        val bearer = x.request.header("authorization")
+            ?.takeIf { it.length > 7 && it.regionMatches(0, "Bearer ", 0, 7, ignoreCase = true) }
+            ?.substring(7)?.trim()
+        val client = if (bearer != null) {
+            if (!aiKeys.verify(bearer, x.remote)) return respond(x, unauthorized())
+            "AI key · " + UserAgents.describe(x.request.header("user-agent"))
+        } else {
+            (authenticate(x) ?: return respond(x, unauthorized())).client
+        }
         if (!options.mjpegAvailable) return respond(x, error(404))
         val site = x.request.header("sec-fetch-site")
         if (site != null && site != "same-origin") return respond(x, error(403))
@@ -514,8 +529,21 @@ class WebCamServer(
         } finally {
             subscription.close()
         } ?: return respond(x, HttpResponse(503).header("Retry-After", "2").json(Json.obj("error" to Json.quote("no-picture"))))
-        listener.onSnapshot(x.remote.hostAddress ?: "?", session.client)
+        listener.onSnapshot(x.remote.hostAddress ?: "?", client)
         return respond(x, HttpResponse(200).body(jpeg, "image/jpeg"))
+    }
+
+    /**
+     * Creates an AI access key for the requesting computer (logged-in viewers only, same-origin).
+     * The key is shown once; creating another one for the same computer replaces it.
+     */
+    private fun createAiKey(x: Exchange): Boolean {
+        authenticate(x) ?: return respond(x, unauthorized())
+        if (!sameOrigin(x)) return respond(x, error(403))
+        if (!isJson(x.request)) return respond(x, error(415))
+        val key = aiKeys.create(x.remote)
+        listener.onAiKeyCreated(x.remote.hostAddress ?: "?")
+        return respond(x, HttpResponse(200).json(Json.obj("key" to Json.quote(key))))
     }
 
     // ---------------------------------------------------------------- helpers

@@ -48,4 +48,7 @@ body.immersive #toolbar { display: none; }
 .code { margin: 8px 0; padding: 10px 12px; border: 1px solid #2a3644; border-radius: 8px; background: #0f151c; color: var(--text);
   font: 12.5px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; user-select: all; }
 .copy { font-size: 14px; padding: 6px 14px; }
+.sheet details { margin: 18px 0; padding: 10px 14px; border: 1px solid #2a3644; border-radius: 10px; }
+.sheet summary { cursor: pointer; font-weight: 600; }
+#ai-key-status { margin-left: 8px; }
 .toast { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); background: rgba(20, 27, 36, .95); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: 90vw; z-index: 30; }

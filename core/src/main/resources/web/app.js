@@ -28,15 +28,28 @@
       copied: 'Copied',
       copyManually: 'Select the text and copy it manually.',
       aiTitle: 'Let an AI see the picture',
-      aiIntro: 'An AI app on a computer in this network (for example Claude Desktop or Claude Code) can take one current picture from the phone whenever you ask it.',
-      aiStep1: 'Download the connection tool on that computer (needs Node.js 18 or newer, no other software):',
+      aiIntro: 'AI agents on this computer that can run commands (Codex, Claude Code, Cursor, Antigravity, Kimi and others) can take a current picture from the phone whenever you ask them. No installation needed: they use curl.',
+      aiStepKey: 'Create an access key for this computer. It works only from this computer, only for single pictures, and keeps working after streaming restarts until you revoke it on the phone. Creating a new key replaces the old one.',
+      aiCreateKey: 'Create key',
+      aiKeyCreated: 'Key created.',
+      aiStepAgent: 'Copy these instructions to your agent: paste them into the chat, or into its standing instructions (AGENTS.md, CLAUDE.md, Cursor rules, …). Then ask, for example: "What does the camera see right now?"',
+      aiNoKeyYet: '(Create a key first.)',
+      aiNoteVision: 'The agent\'s model must be able to look at images. The built-in curl of Windows 10 does not support TLS 1.3: use Windows 11, or the Node.js command below.',
+      aiMcpTitle: 'AI apps that cannot run commands (MCP, e.g. Claude Desktop), or Windows 10',
+      aiStep1: 'Download the connection tool (needs Node.js 18 or newer, nothing else):',
       aiStepDesktop: 'Claude Desktop: Settings → Developer → Edit Config. Add this to claude_desktop_config.json (if it already has "mcpServers", add only the "android-webcam" entry) and correct the path to awc-ai.mjs:',
-      aiStepCode: 'Or Claude Code: run this in a terminal (correct the path):',
-      aiStepAsk: 'Restart the AI app and ask, for example: "What does the camera see right now?" The first time it asks for the access code shown on the phone (a new code every time streaming starts).',
-      aiCheck: 'Test the connection without an AI (replace the access code):',
-      aiPrivacy: 'The phone itself never uploads anything. The tool connects only to this phone (its key is pinned), takes a picture only when the AI asks, and the phone lists every picture taken. The pictures are sent to the AI service you use.',
+      aiStepNode: 'On Windows 10, agents can run this instead of curl (it prints the path of the saved picture; correct the path to awc-ai.mjs):',
+      aiPrivacy: 'The phone itself never uploads anything. Only this computer can use the key; it never opens the live stream; at most one picture per second; the phone lists every picture taken and can revoke AI access at any time ("disconnect all" also revokes it). The pictures are sent to the AI service your agent uses.',
       aiPath: 'full path of awc-ai.mjs',
-      aiCode: 'ACCESS-CODE',
+      agentTitle: 'Phone camera (Android WebCam)',
+      agentWhen: 'When I ask about the camera or what it sees, take a new picture with this command and then look at the saved image file:',
+      agentWindowsShell: '(PowerShell syntax. In cmd use %TEMP%\\awc-camera.jpg, in Git Bash /tmp/awc-camera.jpg.)',
+      agentNotes: [
+        'Each run takes a new picture from the phone\'s rear camera (not mirrored); at most one picture per second.',
+        '-k only skips the certificate authority check: --pinnedpubkey still requires exactly this phone\'s key.',
+        'Keep the picture in the temporary folder: never copy it into a project or commit it.',
+        'If it fails: cannot connect = the phone is not streaming, not in the same network, or its address changed; HTTP 401 = the key was revoked on the phone or this computer\'s address changed (ask me to create a new key in the viewer page); HTTP 503 = no picture right now, retry in a few seconds.',
+      ],
     },
     zh: {
       loginHint: '请输入手机上显示的访问码。',
@@ -63,15 +76,28 @@
       copied: '已复制',
       copyManually: '请选中文字后手动复制。',
       aiTitle: '让 AI 看到画面',
-      aiIntro: '同一网络里电脑上的 AI 应用（例如 Claude 桌面版、Claude Code）可以在你提问时，从手机取一张当前画面来看。',
-      aiStep1: '在那台电脑上下载连接工具（需要 Node.js 18 或更新版本，不需要其他软件）：',
+      aiIntro: '这台电脑上能运行命令的 AI agent（Codex、Claude Code、Cursor、Antigravity、Kimi 等）可以在你提问时，从手机取一张当前画面来看。不需要安装任何东西，它们用系统自带的 curl。',
+      aiStepKey: '为这台电脑生成访问密钥。密钥只能在这台电脑上使用、只能取单张画面，手机重新推流后仍然有效，直到你在手机上撤销。重新生成会替换旧密钥。',
+      aiCreateKey: '生成密钥',
+      aiKeyCreated: '密钥已生成。',
+      aiStepAgent: '把下面这段说明交给你的 agent：直接粘贴到对话里，或者放进它的长期说明（AGENTS.md、CLAUDE.md、Cursor Rules 等）。之后直接问，例如“摄像头现在拍到了什么？”',
+      aiNoKeyYet: '（请先生成密钥）',
+      aiNoteVision: '前提是 agent 用的模型能看图片。Windows 10 自带的 curl 不支持 TLS 1.3：请用 Windows 11，或者用下面的 Node.js 命令。',
+      aiMcpTitle: '不能运行命令的 AI 应用（MCP，例如 Claude 桌面版），或 Windows 10',
+      aiStep1: '下载连接工具（需要 Node.js 18 或更新版本，不需要其他软件）：',
       aiStepDesktop: 'Claude 桌面版：设置 → 开发者 → 编辑配置，把下面内容加入 claude_desktop_config.json（文件里已有 "mcpServers" 时，只加入 "android-webcam" 这一段），并改成 awc-ai.mjs 实际保存的路径：',
-      aiStepCode: '或者 Claude Code：在终端运行（同样改成实际路径）：',
-      aiStepAsk: '重启 AI 应用后直接问，例如“摄像头现在拍到了什么？”。第一次会问你要手机上显示的访问码（每次开始推流都会换新码）。',
-      aiCheck: '不经过 AI 先测试连接（把访问码换成手机上显示的）：',
-      aiPrivacy: '手机本身不会上传任何东西。连接工具只连接这台手机（校验手机公钥），只在 AI 调用时取一张画面，手机上会记录每一次取画面。画面会发送给你使用的 AI 服务。',
+      aiStepNode: 'Windows 10 上的 agent 可以用这条命令代替 curl（会输出保存的图片路径；同样改成 awc-ai.mjs 的实际路径）：',
+      aiPrivacy: '手机本身不会上传任何东西。密钥只有这台电脑能用，永远打不开实时画面，每秒最多取 1 张；手机上会记录每一次取画面，并可随时撤销 AI 访问（“断开所有观看者”也会撤销）。画面会发送给你的 agent 所使用的 AI 服务。',
       aiPath: 'awc-ai.mjs 的完整路径',
-      aiCode: '访问码',
+      agentTitle: '手机摄像头（Android WebCam）',
+      agentWhen: '当我问到摄像头或它拍到了什么时，用下面的命令拍一张新画面，然后查看保存的图片文件：',
+      agentWindowsShell: '（这是 PowerShell 写法；cmd 里改成 %TEMP%\\awc-camera.jpg，Git Bash 里改成 /tmp/awc-camera.jpg。）',
+      agentNotes: [
+        '每次运行都会拍一张新画面（手机后置摄像头，没有镜像）；每秒最多 1 张。',
+        '-k 只是跳过证书机构校验，--pinnedpubkey 仍然严格核对这台手机的公钥。',
+        '图片只放在临时目录，不要复制进项目或提交到仓库。',
+        '失败时：连不上 = 手机没在推流、不在同一网络或地址变了；HTTP 401 = 密钥已在手机上撤销或这台电脑的地址变了（请让我在观看页面重新生成）；HTTP 503 = 手机暂时没有画面，几秒后重试。',
+      ],
     },
   };
   const L = zh ? STRINGS.zh : STRINGS.en;
@@ -170,6 +196,7 @@
     $('btn-fullscreen').addEventListener('click', toggleFullscreen);
     $('btn-logout').addEventListener('click', logout);
     $('btn-ai').addEventListener('click', openAiPanel);
+    $('ai-create-key').addEventListener('click', createAiKey);
     $('ai-close').addEventListener('click', () => { $('ai-panel').hidden = true; });
     document.querySelectorAll('[data-copy]').forEach((button) => button.addEventListener('click', () => copyText(button)));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('ai-panel').hidden = true; });
@@ -464,7 +491,9 @@
     }, 'image/png');
   }
 
-  // ------------------------------------------------------------- AI tool setup
+  // ------------------------------------------------------------- AI agent access
+
+  let aiInfo = null;
 
   /** Example path where a browser saves the download on this computer's system. */
   function examplePath() {
@@ -476,26 +505,61 @@
   }
 
   async function openAiPanel() {
-    let info;
     try {
       const r = await fetch('/api/status', { cache: 'no-store', credentials: 'same-origin' });
       if (r.status === 401) { showLogin(t('sessionEnded')); return; }
-      info = await r.json();
+      aiInfo = await r.json();
     } catch (e) {
       toast(t('network'));
       return;
     }
+    if (!$('ai-agent-text').textContent) showAiSnippets(null);
+    $('ai-panel').hidden = false;
+  }
+
+  async function createAiKey() {
+    const button = $('ai-create-key');
+    button.disabled = true;
+    try {
+      const r = await post('/api/ai-key', {});
+      if (r.status === 401) { showLogin(t('sessionEnded')); return; }
+      if (!r.ok) { toast(t('error', r.status)); return; }
+      showAiSnippets((await r.json()).key);
+      $('ai-key-status').textContent = t('aiKeyCreated');
+    } catch (e) {
+      toast(t('network'));
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  /** Fills the instructions for agents and the MCP settings (placeholders until a key exists). */
+  function showAiSnippets(key) {
     const address = location.host;
+    const pin = aiInfo.pin;
+    const windows = /Windows/.test(navigator.userAgent);
+    document.querySelectorAll('#ai-panel [data-copy]').forEach((b) => { b.disabled = !key; });
+    if (!key) {
+      $('ai-agent-text').textContent = t('aiNoKeyYet');
+      $('ai-config-desktop').textContent = t('aiNoKeyYet');
+      $('ai-node-command').textContent = t('aiNoKeyYet');
+      return;
+    }
+    const output = windows ? '"$env:TEMP\\awc-camera.jpg"' : '/tmp/awc-camera.jpg';
+    const command = (windows ? 'curl.exe' : 'curl') + ' -fsS --tlsv1.3 -k --pinnedpubkey "sha256//' + pin.slice('sha256/'.length) +
+      '" -H "Authorization: Bearer ' + key + '" -o ' + output + ' https://' + address + '/api/snapshot';
+    const lines = ['# ' + t('agentTitle'), '', t('agentWhen'), '', command];
+    if (windows) lines.push(t('agentWindowsShell'));
+    lines.push('');
+    L.agentNotes.forEach((note) => lines.push('- ' + note));
+    $('ai-agent-text').textContent = lines.join('\n');
     const path = examplePath();
     $('ai-config-desktop').textContent = JSON.stringify({
       mcpServers: {
-        'android-webcam': { command: 'node', args: [path], env: { AWC_ADDRESS: address, AWC_PIN: info.pin } },
+        'android-webcam': { command: 'node', args: [path], env: { AWC_ADDRESS: address, AWC_PIN: pin, AWC_KEY: key } },
       },
     }, null, 2);
-    $('ai-config-code').textContent = 'claude mcp add android-webcam --scope user --env "AWC_ADDRESS=' + address +
-      '" --env "AWC_PIN=' + info.pin + '" -- node "' + path + '"';
-    $('ai-check').textContent = 'node "' + path + '" --check --address ' + address + ' --pin "' + info.pin + '" --code ' + t('aiCode');
-    $('ai-panel').hidden = false;
+    $('ai-node-command').textContent = 'node "' + path + '" snap --address ' + address + ' --pin "' + pin + '" --key ' + key;
   }
 
   async function copyText(button) {

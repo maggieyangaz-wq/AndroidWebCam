@@ -3,6 +3,7 @@
 // Usage: node tools/ai-bridge-e2e.mjs <port> <info.json written by devServer> <output dir>
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -79,6 +80,31 @@ class McpClient {
   }
 }
 
+/** Logs in like the viewer page and creates an AI access key for this computer. */
+function phone(method, path, headers = {}, body = null) {
+  return new Promise((resolve, reject) => {
+    // Content-Length, not chunked: the phone's strict HTTP parser refuses chunked bodies.
+    const all = body === null ? headers : { ...headers, 'Content-Length': Buffer.byteLength(body) };
+    const req = https.request({ host: '127.0.0.1', port, method, path, headers: all, rejectUnauthorized: false, minVersion: 'TLSv1.3' }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function createAiKey() {
+  const json = { 'Content-Type': 'application/json', Origin: `https://${address}` };
+  const login = await phone('POST', '/api/login', json, JSON.stringify({ code: info.code }));
+  const cookie = String(login.headers['set-cookie']).split(';')[0];
+  const created = await phone('POST', '/api/ai-key', { ...json, Cookie: cookie }, '{}');
+  if (created.status !== 200) throw new Error(`creating an AI key failed: login ${login.status}, key ${created.status}`);
+  return JSON.parse(created.body).key;
+}
+
 const textOf = (result) => (result.content || []).filter((c) => c.type === 'text').map((c) => c.text).join(' ');
 const imageOf = (result) => (result.content || []).find((c) => c.type === 'image');
 
@@ -144,13 +170,27 @@ const imageOf = (result) => (result.content || []).find((c) => c.type === 'image
     await mcp4.close();
   }
 
-  // Command-line check, as shown on the viewer page.
+  // AI access key (as created in the viewer page): no access code needed, as MCP server and as command.
   {
-    const out = path.join(outDir, 'ai-bridge-check.jpg');
-    const p = spawnSync(process.execPath, [bridge, '--check', '--address', address, '--pin', info.pin, '--code', info.code, '--out', out],
+    const key = await createAiKey();
+    const mcp5 = new McpClient({ AWC_ADDRESS: address, AWC_PIN: info.pin, AWC_KEY: key });
+    await mcp5.initialize();
+    let r = await mcp5.snapshot();
+    check('MCP with AI key: picture without access code', !r.isError && imageOf(r), textOf(r));
+    await mcp5.close();
+
+    const out = path.join(outDir, 'ai-bridge-snap.jpg');
+    const p = spawnSync(process.execPath, [bridge, 'snap', '--address', address, '--pin', info.pin, '--key', key, '--out', out],
       { encoding: 'utf8', timeout: 60000 });
-    const ok = p.status === 0 && fs.existsSync(out) && fs.readFileSync(out)[0] === 0xff;
-    check('--check saves a picture', ok, (p.stdout + p.stderr).trim());
+    check('snap command saves a picture and prints its path',
+      p.status === 0 && p.stdout.trim() === out && fs.readFileSync(out)[0] === 0xff, (p.stdout + p.stderr).trim());
+
+    const unknownKey = 'awc_' + 'A'.repeat(43);
+    const mcp6 = new McpClient({ AWC_ADDRESS: address, AWC_PIN: info.pin, AWC_KEY: unknownKey });
+    await mcp6.initialize();
+    r = await mcp6.snapshot();
+    check('revoked or unknown key explained', r.isError && /not valid/.test(textOf(r)) && /new key/.test(textOf(r)), textOf(r));
+    await mcp6.close();
   }
 
   const failed = results.filter((x) => !x.ok).length;

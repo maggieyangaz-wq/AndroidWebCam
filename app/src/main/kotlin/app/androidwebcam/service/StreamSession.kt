@@ -13,12 +13,14 @@ import app.androidwebcam.StreamSettings
 import app.androidwebcam.camera.BackCameras
 import app.androidwebcam.core.Orientation
 import app.androidwebcam.core.auth.AccessControl
+import app.androidwebcam.core.auth.AiKeys
 import app.androidwebcam.core.auth.SecurityEvent
 import app.androidwebcam.core.server.WebCamServer
 import app.androidwebcam.core.stream.StreamHub
 import app.androidwebcam.core.tls.IdentityKeyManager
 import app.androidwebcam.encoder.VideoPipeline
 import app.androidwebcam.net.LanNetworkMonitor
+import app.androidwebcam.security.AiKeyStore
 import app.androidwebcam.security.TlsIdentityStore
 import java.net.BindException
 import java.util.concurrent.Executors
@@ -42,6 +44,8 @@ class StreamSession(
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "awc-session").apply { isDaemon = true } }
     private val identityStore = TlsIdentityStore(context, logger)
+    private val aiKeyStore = AiKeyStore(context)
+    @Volatile private var aiKeys: AiKeys? = null
     private var network: LanNetworkMonitor? = null
     private var keyManager: IdentityKeyManager? = null
     private var access: AccessControl? = null
@@ -67,6 +71,11 @@ class StreamSession(
             keyManager = km
             val ac = AccessControl(onEvent = { event -> main.post { onSecurityEvent(event) } })
             access = ac
+            val keys = AiKeys(aiKeyStore.load(), onChange = { records ->
+                aiKeyStore.save(records)
+                StreamController.update { it.copy(aiKeys = records.toInfo()) }
+            })
+            aiKeys = keys
             val hub = StreamHub(this)
 
             val srv = WebCamServer(
@@ -82,8 +91,13 @@ class StreamSession(
                         val record = SnapshotRecord(address, client, System.currentTimeMillis())
                         StreamController.update { it.copy(snapshotCount = it.snapshotCount + 1, lastSnapshot = record) }
                     }
+
+                    override fun onAiKeyCreated(address: String) {
+                        main.post { if (!stopped) alert(context.getString(R.string.alert_ai_key, address)) }
+                    }
                 },
                 logger,
+                aiKeys = keys,
             )
             // A previous session may still be releasing the port for a moment.
             var bound = false
@@ -141,6 +155,7 @@ class StreamSession(
                     zoomMin = camera.zoomMin,
                     zoomMax = camera.zoomMax,
                     zoom = 1f,
+                    aiKeys = keys.list().toInfo(),
                 )
             }
             main.post {
@@ -236,9 +251,15 @@ class StreamSession(
             }
             is SecurityEvent.LoginFailed -> return
         }
+        alert(text)
+    }
+
+    private fun alert(text: String) {
         StreamController.update { it.copy(alerts = (listOf(text) + it.alerts).take(5)) }
         host.onSecurityAlert(text)
     }
+
+    private fun List<AiKeys.Record>.toInfo() = map { AiKeyInfo(it.address, it.createdAt, it.lastUsedAt) }
 
     private fun onEndpointsChanged(endpoints: List<LanNetworkMonitor.Endpoint>) {
         if (stopped) return
@@ -284,9 +305,14 @@ class StreamSession(
     fun disconnectAllAndRotateCode() {
         val ac = access ?: return
         ac.revokeAll()
+        aiKeys?.revokeAll() // "disconnect all" also ends AI access
         server?.disconnectAllViewers()
         StreamController.update { it.copy(accessCode = ac.displayCode, pairingToken = ac.issuePairingToken()) }
         schedulePairingRefresh()
+    }
+
+    fun revokeAiKeys() {
+        aiKeys?.revokeAll()
     }
 
     /** Stops everything; safe to call from the main thread. */

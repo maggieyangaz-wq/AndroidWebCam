@@ -37,6 +37,8 @@ object UserAgents {
             }
             return if (os.isEmpty()) "AI tool" else "AI tool · $os"
         }
+        if (ua.startsWith("curl/")) return "curl"
+        if ("PowerShell/" in ua) return "PowerShell"
         val browser = when {
             "Edg/" in ua || "EdgA/" in ua || "EdgiOS/" in ua -> "Edge"
             "OPR/" in ua -> "Opera"

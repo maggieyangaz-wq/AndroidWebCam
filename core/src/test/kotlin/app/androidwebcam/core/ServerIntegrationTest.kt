@@ -26,6 +26,7 @@ class ServerIntegrationTest {
     private val allow = AtomicBoolean(true)
     private val hub = StreamHub(object : StreamHub.Listener {})
     private val snapshots = java.util.concurrent.CopyOnWriteArrayList<String>()
+    private val aiKeys = app.androidwebcam.core.auth.AiKeys()
     private lateinit var server: WebCamServer
     private lateinit var host: String
 
@@ -42,6 +43,7 @@ class ServerIntegrationTest {
                     snapshots.add("$address $client")
                 }
             },
+            aiKeys = aiKeys,
         )
         server.start()
         host = "127.0.0.1:${server.port}"
@@ -241,6 +243,44 @@ class ServerIntegrationTest {
             assertEquals(429, again.status)
             assertEquals("1", again.header("retry-after"))
         }
+    }
+
+    @Test
+    fun aiKeyLetsAgentsTakePicturesWithoutLoggingIn() {
+        val cookie = connect().use { login(it) }
+        var issued = ""
+        connect().use { c ->
+            // Only logged-in viewers can create a key, and only from the viewer page (same origin).
+            assertEquals(401, c.request("POST", "/api/ai-key", host, mapOf("Origin" to "https://$host", "Content-Type" to "application/json"), "{}").status)
+            assertEquals(403, c.request("POST", "/api/ai-key", host, mapOf("Cookie" to cookie, "Content-Type" to "application/json"), "{}").status)
+            val created = c.request("POST", "/api/ai-key", host, mapOf("Cookie" to cookie, "Origin" to "https://$host", "Content-Type" to "application/json"), "{}")
+            assertEquals(200, created.status)
+            val key = Regex("\"key\":\"(awc_[A-Za-z0-9_-]{43})\"").find(created.text)!!.groupValues[1]
+            issued = key
+
+            assertEquals(401, c.request("GET", "/api/snapshot", host, mapOf("Authorization" to "Bearer awc_${"x".repeat(43)}")).status)
+            val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 9, 0xFF.toByte(), 0xD9.toByte())
+            val publishing = java.util.concurrent.atomic.AtomicBoolean(true)
+            val publisher = Thread {
+                while (publishing.get()) {
+                    hub.publishJpeg(jpeg)
+                    Thread.sleep(50)
+                }
+            }.apply { start() }
+            val r = c.request("GET", "/api/snapshot", host, mapOf("Authorization" to "Bearer $key", "User-Agent" to "curl/8.5.0"))
+            publishing.set(false)
+            publisher.join()
+            assertEquals(200, r.status)
+            assertEquals(jpeg.toList(), r.body.toList())
+            assertEquals(listOf("127.0.0.1 AI key · curl"), snapshots)
+            // The key never opens the live stream.
+            c.send("GET /mjpeg HTTP/1.1\r\nHost: $host\r\nAuthorization: Bearer $key\r\n\r\n")
+            assertEquals(401, c.readResponse().status)
+        }
+        // Revoked on the phone (e.g. "disconnect all"): the key stops working.
+        aiKeys.revokeAll()
+        Thread.sleep(1100) // one picture per second and address
+        connect().use { c -> assertEquals(401, c.request("GET", "/api/snapshot", host, mapOf("Authorization" to "Bearer $issued")).status) }
     }
 
     @Test

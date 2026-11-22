@@ -1,24 +1,28 @@
 #!/usr/bin/env node
-// Android WebCam AI bridge: a small MCP server (stdio) that lets an AI app on this computer,
-// such as Claude Desktop or Claude Code, take one picture from the phone when you ask for it.
+// Android WebCam AI bridge: takes one picture from the phone, either as a command
+// (`node awc-ai.mjs snap`, for agents that run commands, e.g. on Windows 10 whose curl lacks TLS 1.3)
+// or as a small MCP server over stdio (default), for AI apps such as Claude Desktop.
 // No dependencies, Node.js 18 or newer. Download it from the phone's viewer page.
 //
 // Security and privacy:
 //  - connects only to the configured phone in your local network (private IPv4 address),
 //    over TLS 1.3, and checks the phone's public-key pin BEFORE sending anything;
-//  - logs in with the 8-character access code shown on the phone;
-//  - takes a picture only when the AI calls the tool; nothing runs in the background;
+//  - authenticates with the AI access key created in the viewer page (or the access code);
+//  - takes a picture only when asked; nothing runs in the background;
 //  - the pictures are sent to the AI service you use with this tool.
 //
-// Configuration (environment variables; the viewer page shows ready-made values):
+// Configuration (environment variables or --address/--pin/--key; the viewer page shows them):
 //   AWC_ADDRESS      the phone's address, e.g. 192.168.1.23:8443
 //   AWC_PIN          the phone's public-key pin, e.g. sha256/AbC...=
-//   AWC_ACCESS_CODE  optional: the access code; otherwise the AI asks you for it
+//   AWC_KEY          the AI access key for this computer (awc_...)
+//   AWC_ACCESS_CODE  optional instead of a key: the access code shown on the phone
 //
-// Check the setup without an AI:
-//   node awc-ai.mjs --check --code K7QM-3XRP [--out picture.jpg]
+// Take a picture without an AI (prints the file's path):
+//   node awc-ai.mjs snap --address 192.168.1.23:8443 --pin sha256/... --key awc_... [--out picture.jpg]
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import readline from 'node:readline';
 import tls from 'node:tls';
 
@@ -237,8 +241,8 @@ function jpegSize(jpeg) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Takes one picture; logs in first (or again) when needed. */
-async function takePicture({ address, pin, accessCode } = {}) {
+/** Takes one picture: with the AI access key, or else logging in with the access code when needed. */
+async function takePicture({ address, pin, key, accessCode } = {}) {
   const target = parseAddress(address);
   if (!target) {
     throw new BridgeError('config', address
@@ -248,6 +252,26 @@ async function takePicture({ address, pin, accessCode } = {}) {
   const checkedPin = parsePin(pin);
   if (!checkedPin) {
     throw new BridgeError('config', 'The phone\'s public-key pin is missing or malformed (AWC_PIN). Copy the settings from the "Let an AI see the picture" panel (robot button) of the viewer page.');
+  }
+  if (key) {
+    const checkedKey = String(key).trim();
+    if (!/^awc_[A-Za-z0-9_-]{43}$/.test(checkedKey)) {
+      throw new BridgeError('config', 'The AI access key (AWC_KEY) is malformed. Create a key in the "Let an AI see the picture" panel (robot button) of the viewer page.');
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await request(target, checkedPin, 'GET', '/api/snapshot', { Authorization: `Bearer ${checkedKey}` });
+      if (r.status === 200 && r.body.length > 3 && r.body[0] === 0xff && r.body[1] === 0xd8) {
+        return { jpeg: r.body, size: jpegSize(r.body), target };
+      }
+      if (r.status === 401) {
+        throw new BridgeError('key', 'The AI access key is not valid (it was revoked on the phone, or this computer\'s network address changed). ' +
+          'Ask the user to create a new key in the viewer page (robot button) and update the configuration.');
+      }
+      if (r.status === 429) { await sleep(1100); continue; }
+      if (r.status === 503) throw new BridgeError('no-picture', 'The phone has no picture right now (the camera may be in use by another app, or streaming is just starting). Try again in a few seconds.');
+      throw new BridgeError('network', `Unexpected answer from the phone (HTTP ${r.status}).`);
+    }
+    throw new BridgeError('network', 'The phone did not provide a picture. Try again in a moment.');
   }
   let code = null;
   if (accessCode) {
@@ -285,8 +309,8 @@ const TOOL = {
   title: 'Phone camera picture',
   description: 'Takes one new picture from the Android WebCam phone (its rear camera, exactly as the live viewers see it, never mirrored) ' +
     'and returns it as an image. Use it whenever the user wants to know what the camera currently shows. ' +
-    'If the result says an access code is needed, ask the user for the 8-character access code shown in the Android WebCam app ' +
-    'and call again with access_code. If the phone\'s address changed, the user can give the new address (address).',
+    'If the result says an access code is needed (no AI access key configured), ask the user for the 8-character access code ' +
+    'shown in the Android WebCam app and call again with access_code. If the phone\'s address changed, the user can give the new address (address).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -317,6 +341,7 @@ async function callTool(params) {
       const picture = await takePicture({
         address: args.address || process.env.AWC_ADDRESS,
         pin: process.env.AWC_PIN,
+        key: process.env.AWC_KEY,
         accessCode: args.access_code || process.env.AWC_ACCESS_CODE,
       });
       const size = picture.size ? `${picture.size.width}×${picture.size.height}, ` : '';
@@ -403,22 +428,24 @@ function serve() {
 
 // ------------------------------------------------------------------ command line
 
-async function check(argv) {
+/** `snap` (alias `--check`): saves one picture and prints the file's full path. */
+async function snap(argv) {
   const option = (name) => {
     const i = argv.indexOf(name);
     return i >= 0 ? argv[i + 1] : undefined;
   };
-  const out = option('--out') || 'awc-picture.jpg';
+  const out = path.resolve(option('--out') || path.join(os.tmpdir(), 'awc-camera.jpg'));
   try {
     const picture = await takePicture({
       address: option('--address') || process.env.AWC_ADDRESS,
       pin: option('--pin') || process.env.AWC_PIN,
+      key: option('--key') || process.env.AWC_KEY,
       accessCode: option('--code') || process.env.AWC_ACCESS_CODE,
     });
     fs.writeFileSync(out, picture.jpeg);
-    const size = picture.size ? ` ${picture.size.width}x${picture.size.height}` : '';
-    console.log(`OK: picture${size} from ${picture.target.authority} saved to ${out}`);
-    console.log(`成功：已从 ${picture.target.authority} 取得画面，保存为 ${out}`);
+    const size = picture.size ? ` (${picture.size.width}x${picture.size.height}, rear camera, not mirrored)` : '';
+    console.log(out);
+    console.error(`Picture${size} from ${picture.target.authority} saved.`);
     return 0;
   } catch (e) {
     console.error(`FAILED: ${e.message || e}`);
@@ -436,11 +463,12 @@ async function check(argv) {
   if (argv.includes('--version')) {
     console.log(VERSION);
   } else if (argv.includes('--help') || argv.includes('-h')) {
-    console.log('Android WebCam AI bridge (MCP server over stdio).\n' +
-      'Environment: AWC_ADDRESS, AWC_PIN, optional AWC_ACCESS_CODE.\n' +
-      'Check the setup: node awc-ai.mjs --check --code XXXX-XXXX [--out picture.jpg]');
-  } else if (argv.includes('--check')) {
-    check(argv).then((code) => process.exit(code));
+    console.log('Android WebCam AI bridge.\n' +
+      '  node awc-ai.mjs snap [--out file.jpg]   take one picture, print its path\n' +
+      '  node awc-ai.mjs                          MCP server over stdio (for AI apps)\n' +
+      'Settings: AWC_ADDRESS, AWC_PIN, AWC_KEY (or --address, --pin, --key); optional AWC_ACCESS_CODE / --code.');
+  } else if (argv[0] === 'snap' || argv.includes('--check')) {
+    snap(argv).then((code) => process.exit(code));
   } else {
     serve();
   }

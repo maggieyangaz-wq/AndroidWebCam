@@ -23,7 +23,7 @@
     <string name="label_viewers">观看者（%1$d/%2$d）</string>
     <string name="no_viewers">暂时没有人在观看。</string>
     <string name="viewer_line">%1$s · %2$s · %3$s</string>
-    <string name="action_disconnect_all">断开所有观看者并更换访问码</string>
+    <string name="action_disconnect_all">断开所有观看者和 AI 访问，并更换访问码</string>
     <string name="label_alerts">最近的安全事件</string>
 
     <string name="section_controls">摄像头控制</string>
@@ -80,6 +80,12 @@
     <string name="kind_other">局域网</string>
     <string name="label_qr_for">二维码对应</string>
     <string name="snapshot_line">已被取走单张画面 %1$d 次，最近一次 %2$s，来自 %3$s（%4$s）</string>
+    <string name="label_ai_access">AI 访问（只能取单张画面）</string>
+    <string name="ai_key_line">%1$s · 创建于 %2$s · 最近使用 %3$s</string>
+    <string name="ai_key_never_used">未使用</string>
+    <string name="action_revoke_ai">撤销 AI 访问</string>
+    <string name="alert_ai_key">已为 %1$s 创建 AI 访问密钥</string>
+    <string name="app_version_line">Android WebCam %1$s</string>
     <string name="section_keep_alive">保持推流不中断</string>
     <string name="keep_awake_label">推流时保持亮屏（1 分钟无操作自动黑屏）</string>
     <string name="keep_awake_desc">推荐开启。一加/OxygenOS 等系统会在熄屏较久后结束后台应用。开启后屏幕保持常亮但全黑、亮度最低，推流不会被系统结束；轻点两下即可返回。推流时请不要按电源键锁屏。注意：开启期间手机不会自动锁屏，请把手机放在可信的地方。</string>

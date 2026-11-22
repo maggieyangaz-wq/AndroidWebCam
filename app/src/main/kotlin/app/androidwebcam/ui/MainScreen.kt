@@ -125,6 +125,13 @@ fun MainScreen(
             InfoCard(stringResource(R.string.section_privacy)) {
                 Text(stringResource(R.string.privacy_points), style = MaterialTheme.typography.bodyMedium)
             }
+            Text(
+                stringResource(R.string.app_version_line, app.androidwebcam.BuildConfig.VERSION_NAME),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -327,6 +334,20 @@ private fun ViewersCard(state: StreamState) {
                 stringResource(R.string.snapshot_line, state.snapshotCount, time, last.address, last.client),
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+        if (state.aiKeys.isNotEmpty()) {
+            // Computers whose AI agents may take single pictures (until revoked).
+            HorizontalDivider()
+            Text(stringResource(R.string.label_ai_access), style = MaterialTheme.typography.labelLarge)
+            val format = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+            for (key in state.aiKeys) {
+                val created = format.format(java.util.Date(key.createdAtEpochMs))
+                val used = if (key.lastUsedAtEpochMs > 0) format.format(java.util.Date(key.lastUsedAtEpochMs)) else stringResource(R.string.ai_key_never_used)
+                Text(stringResource(R.string.ai_key_line, key.address, created, used), style = MaterialTheme.typography.bodySmall)
+            }
+            OutlinedButton(onClick = { StreamController.revokeAiKeys() }, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.action_revoke_ai))
+            }
         }
         OutlinedButton(onClick = { StreamController.disconnectAllAndRotateCode() }, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.action_disconnect_all))

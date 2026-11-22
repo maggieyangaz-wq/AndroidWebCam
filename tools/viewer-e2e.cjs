@@ -134,26 +134,44 @@ async function waitForPicture(page) {
       await context.close();
     }
 
-    // 5) "Let an AI see" panel: ready-made settings with this phone's address and key pin.
+    // 5) "Let an AI see" panel: an AI key for this computer and instructions any agent can follow
+    //    (one curl command, pinned to the phone's key), run here with the real curl.
     {
       const { context, page, problems } = await newPage(browser, { locale: 'zh-CN' });
       await loginWithCode(page, info.code);
       await page.click('#btn-ai');
       await page.waitForSelector('#ai-panel:not([hidden])');
       check('AI panel in Chinese', (await page.textContent('#ai-title')).includes('让 AI'));
+      check('copy disabled until a key exists', await page.isDisabled('#ai-panel [data-copy="ai-agent-text"]'));
+      await page.click('#ai-create-key');
+      await page.waitForFunction(() => document.getElementById('ai-agent-text').textContent.includes('awc_'));
+      const text = await page.textContent('#ai-agent-text');
+      const command = text.split('\n').find((line) => line.startsWith('curl '));
+      const pinBase64 = info.pin.slice('sha256/'.length);
+      check('agent instructions: curl pinned to the phone key with an AI key',
+        command && command.includes(`--pinnedpubkey "sha256//${pinBase64}"`) && /Bearer awc_[A-Za-z0-9_-]{43}/.test(command) &&
+        command.includes(`https://127.0.0.1:${port}/api/snapshot`), command);
+      const out = require('path').join(outDir, 'agent-curl.jpg');
+      let ran = '';
+      try {
+        ran = require('child_process').execSync(command.replace('/tmp/awc-camera.jpg', `'${out}'`), { encoding: 'utf8', timeout: 30000, shell: '/bin/bash' });
+      } catch (e) {
+        ran = String(e.stderr || e.message);
+      }
+      const jpeg = fs.existsSync(out) ? fs.readFileSync(out) : Buffer.alloc(0);
+      check('the curl command from the instructions saves a JPEG', jpeg[0] === 0xff && jpeg[1] === 0xd8, ran.trim());
       const server = JSON.parse(await page.textContent('#ai-config-desktop')).mcpServers['android-webcam'];
-      check('AI panel: Claude Desktop config with address and key pin',
-        server.command === 'node' && server.env.AWC_ADDRESS === `127.0.0.1:${port}` && server.env.AWC_PIN === info.pin,
-        JSON.stringify(server.env));
-      const command = await page.textContent('#ai-config-code');
-      check('AI panel: Claude Code command', command.startsWith('claude mcp add android-webcam') && command.includes(info.pin), command);
+      check('MCP settings with address, key pin and AI key',
+        server.command === 'node' && server.env.AWC_ADDRESS === `127.0.0.1:${port}` && server.env.AWC_PIN === info.pin &&
+        /^awc_/.test(server.env.AWC_KEY), JSON.stringify(server.env).replace(/awc_[^"]+/, 'awc_…'));
+      check('Node command for Windows 10', (await page.textContent('#ai-node-command')).includes(' snap --address '));
       const download = await page.evaluate(async () => {
         const r = await fetch(document.getElementById('ai-download').href);
         return { status: r.status, disposition: r.headers.get('content-disposition'), text: await r.text() };
       });
       check('AI panel: connection tool download',
         download.status === 200 && /attachment/.test(download.disposition) && download.text.includes('camera_snapshot'), download.disposition);
-      await page.screenshot({ path: `${outDir}/viewer-ai-panel.png` });
+      await page.screenshot({ path: `${outDir}/viewer-ai-panel.png`, fullPage: true });
       await page.click('#ai-close');
       check('AI panel closes', await page.isHidden('#ai-panel'));
       check('no CSP violations in the AI panel', problems.length === 0, problems.join(' | '));

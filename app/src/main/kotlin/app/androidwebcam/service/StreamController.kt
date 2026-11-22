@@ -16,6 +16,9 @@ enum class ErrorKind { CAMERA_PERMISSION, PORT_IN_USE, NO_CAMERA, CAMERA, ENCODE
 /** The latest single picture taken by a logged-in client such as an AI tool (/api/snapshot). */
 data class SnapshotRecord(val address: String, val client: String, val atEpochMs: Long)
 
+/** An AI access key (only its computer's address and times are shown). */
+data class AiKeyInfo(val address: String, val createdAtEpochMs: Long, val lastUsedAtEpochMs: Long)
+
 data class StreamState(
     val phase: Phase = Phase.IDLE,
     val error: ErrorKind? = null,
@@ -41,6 +44,7 @@ data class StreamState(
     val alerts: List<String> = emptyList(),
     val snapshotCount: Int = 0,
     val lastSnapshot: SnapshotRecord? = null,
+    val aiKeys: List<AiKeyInfo> = emptyList(),
 )
 
 /**
@@ -89,6 +93,8 @@ object StreamController {
     fun setZoom(ratio: Float) { session?.setZoom(ratio) }
 
     fun disconnectAllAndRotateCode() { session?.disconnectAllAndRotateCode() }
+
+    fun revokeAiKeys() { session?.revokeAiKeys() }
 
     fun clearError() = update { if (it.phase == Phase.ERROR) StreamState() else it }
 }

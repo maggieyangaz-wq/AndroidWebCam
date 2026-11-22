@@ -174,6 +174,24 @@ class StreamingDeviceTest {
                 val status = c.request("GET", "/api/status", authority, mapOf("Cookie" to cookie))
                 assertTrue("status must offer the key pin $pin: ${status.text}", status.text.contains("\"pin\":\"$pin\""))
                 assertEquals(200, c.request("GET", "/awc-ai.mjs", authority).status)
+
+                // AI access key for agents: created by the logged-in viewer, then a picture with only
+                // the key (what the curl command in the agent instructions does); revocable on the phone.
+                val json = mapOf("Cookie" to cookie, "Origin" to "https://$authority", "Content-Type" to "application/json")
+                val created = c.request("POST", "/api/ai-key", authority, json, "{}")
+                assertEquals(200, created.status)
+                val key = Regex("\"key\":\"(awc_[A-Za-z0-9_-]{43})\"").find(created.text)!!.groupValues[1]
+                Thread.sleep(1_100) // at most one picture per second and address
+                val viaKey = c.request("GET", "/api/snapshot", authority, mapOf("Authorization" to "Bearer $key", "User-Agent" to "curl/8.5.0"))
+                assertEquals(200, viaKey.status)
+                val picture = BitmapFactory.decodeByteArray(viaKey.body, 0, viaKey.body.size)
+                assertTrue(picture.height > picture.width)
+                assertEquals("AI key · curl", StreamController.state.value.lastSnapshot?.client)
+                assertTrue(StreamController.state.value.aiKeys.any { it.address == host })
+                StreamController.revokeAiKeys()
+                assertTrue(StreamController.state.value.aiKeys.isEmpty())
+                assertEquals(401, c.request("GET", "/api/snapshot", authority, mapOf("Authorization" to "Bearer $key")).status)
+                log("AI key: picture ${picture.width}x${picture.height}, revoked")
             }
 
             assertTrue(StreamController.state.value.viewers.isEmpty() || StreamController.state.value.phase == Phase.RUNNING)

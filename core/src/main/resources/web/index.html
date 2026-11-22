@@ -46,27 +46,32 @@
   <div class="sheet-body">
     <button id="ai-close" type="button" class="close" data-i18n-title="close" title="Close">&#x2715;</button>
     <h2 id="ai-title" data-i18n="aiTitle">Let an AI see the picture</h2>
-    <p data-i18n="aiIntro">An AI app on a computer in this network can take one current picture from the phone whenever you ask it.</p>
+    <p data-i18n="aiIntro">AI agents on this computer that can run commands can take a current picture from the phone whenever you ask.</p>
     <ol>
       <li>
-        <span data-i18n="aiStep1">Download the connection tool (needs Node.js 18 or newer):</span>
-        <a id="ai-download" href="/awc-ai.mjs" download="awc-ai.mjs">awc-ai.mjs</a>
+        <span data-i18n="aiStepKey">Create an access key for this computer:</span>
+        <button id="ai-create-key" type="button" class="copy" data-i18n="aiCreateKey">Create key</button>
+        <span id="ai-key-status" class="note"></span>
       </li>
       <li>
-        <span data-i18n="aiStepDesktop">Claude Desktop: Settings → Developer → Edit Config. Add this to claude_desktop_config.json and correct the path to awc-ai.mjs:</span>
-        <pre id="ai-config-desktop" class="code"></pre>
-        <button type="button" class="copy" data-copy="ai-config-desktop" data-i18n="copy">Copy</button>
+        <span data-i18n="aiStepAgent">Give these instructions to your agent:</span>
+        <pre id="ai-agent-text" class="code"></pre>
+        <button type="button" class="copy" data-copy="ai-agent-text" data-i18n="copy" disabled>Copy</button>
       </li>
-      <li>
-        <span data-i18n="aiStepCode">Or Claude Code: run this in a terminal (correct the path):</span>
-        <pre id="ai-config-code" class="code"></pre>
-        <button type="button" class="copy" data-copy="ai-config-code" data-i18n="copy">Copy</button>
-      </li>
-      <li data-i18n="aiStepAsk">Restart the AI app and ask, for example: "What does the camera see right now?" The first time it asks for the access code shown on the phone (a new code every time streaming starts).</li>
     </ol>
-    <p class="note"><span data-i18n="aiCheck">Test the connection without an AI (replace the access code):</span></p>
-    <pre id="ai-check" class="code"></pre>
-    <p class="note" data-i18n="aiPrivacy">The phone itself never uploads anything. The tool connects only to this phone (its key is pinned), takes a picture only when the AI asks, and the phone lists every picture taken. The pictures are sent to the AI service you use.</p>
+    <p class="note" data-i18n="aiNoteVision">The agent's model must be able to look at images.</p>
+    <details>
+      <summary data-i18n="aiMcpTitle">AI apps that cannot run commands (MCP), or Windows 10</summary>
+      <p><span data-i18n="aiStep1">Download the connection tool (needs Node.js 18 or newer):</span>
+        <a id="ai-download" href="/awc-ai.mjs" download="awc-ai.mjs">awc-ai.mjs</a></p>
+      <p data-i18n="aiStepDesktop">Claude Desktop: add this to claude_desktop_config.json.</p>
+      <pre id="ai-config-desktop" class="code"></pre>
+      <button type="button" class="copy" data-copy="ai-config-desktop" data-i18n="copy" disabled>Copy</button>
+      <p data-i18n="aiStepNode">Agents on Windows 10 can use this command instead of curl:</p>
+      <pre id="ai-node-command" class="code"></pre>
+      <button type="button" class="copy" data-copy="ai-node-command" data-i18n="copy" disabled>Copy</button>
+    </details>
+    <p class="note" data-i18n="aiPrivacy">The phone itself never uploads anything.</p>
   </div>
 </section>
 <noscript>JavaScript is required to view the stream.</noscript>

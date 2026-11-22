@@ -25,7 +25,7 @@
     <string name="label_viewers">Viewers (%1$d/%2$d)</string>
     <string name="no_viewers">Nobody is watching.</string>
     <string name="viewer_line">%1$s · %2$s · %3$s</string>
-    <string name="action_disconnect_all">Disconnect everyone and change the code</string>
+    <string name="action_disconnect_all">Disconnect all viewers and AI access, change the code</string>
     <string name="label_alerts">Recent security events</string>
 
     <string name="section_controls">Camera controls</string>
@@ -82,6 +82,12 @@
     <string name="kind_other">Local network</string>
     <string name="label_qr_for">QR code for</string>
     <string name="snapshot_line">Single pictures taken: %1$d, last at %2$s by %3$s (%4$s)</string>
+    <string name="label_ai_access">AI access (single pictures)</string>
+    <string name="ai_key_line">%1$s · created %2$s · last used %3$s</string>
+    <string name="ai_key_never_used">never</string>
+    <string name="action_revoke_ai">Revoke AI access</string>
+    <string name="alert_ai_key">AI access key created for %1$s</string>
+    <string name="app_version_line">Android WebCam %1$s</string>
     <string name="section_keep_alive">Keep streaming without interruption</string>
     <string name="keep_awake_label">Keep the screen on while streaming (goes black after 1 minute without touch)</string>
     <string name="keep_awake_desc">Recommended. Some systems (e.g. OnePlus/OxygenOS) end background apps after the screen has been off for a while. With this on, the screen stays on but black at the lowest brightness and streaming is never ended by the system. Double-tap to return. Don\'t lock the phone with the power button while streaming. Note: the phone does not lock itself while this is on, so keep it in a trusted place.</string>
