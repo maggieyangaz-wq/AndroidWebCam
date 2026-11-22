@@ -18,6 +18,7 @@ on:
       - "gradle.properties"
       - "gradlew"
       - "VERSION"
+      - "tools/release-version.sh"
       - ".github/workflows/release.yml"
   workflow_dispatch:
 
@@ -55,47 +56,18 @@ jobs:
           expected=$(curl -fsSL "https://services.gradle.org/distributions/gradle-${version}-wrapper.jar.sha256")
           echo "${expected}  gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
 
-      - name: Compute version
+      # Version convention (README, "版本号规范"): VERSION is MAJOR.MINOR.PATCH, raised for every
+      # release; versionCode = MAJOR * 1000000 + MINOR * 1000 + PATCH, so it only increases.
+      # Fails if the APK changed but VERSION was not raised, or CHANGELOG.md has no entry for it.
+      - name: Compute and check version
         id: version
         run: |
-          released=$(git tag --points-at HEAD --list 'v*' | head -n 1)
-          if [ -n "$released" ]; then
-            echo "This commit was already released as ${released}."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # versionCode must always increase so every update installs over the previous version:
-          # the number of commits on main, but never below the newest released code
-          # (release tags are vMAJOR.MINOR.CODE), even if the history is ever rewritten.
-          code=$(git rev-list --count HEAD)
-          last=$(git tag --list 'v*' | sed -n 's/^v[0-9]*\.[0-9]*\.\([0-9]*\)$/\1/p' | sort -n | tail -n 1)
-          if [ -n "$last" ] && [ "$code" -le "$last" ]; then code=$((last + 1)); fi
-          base=$(tr -d '[:space:]' < VERSION)
-          name="${base}.${code}"
-          {
-            echo "skip=false"
-            echo "code=${code}"
-            echo "name=${name}"
-            echo "tag=v${name}"
-          } >> "$GITHUB_OUTPUT"
-          echo "Version ${name} (versionCode ${code})"
-
-      - name: Check whether this version already has a release or draft
-        id: existing
-        if: steps.version.outputs.skip == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            echo "Release $TAG already exists, nothing to do."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
+          result=$(tools/release-version.sh) # (no pipe: a failure must fail this step)
+          echo "$result"
+          echo "$result" >> "$GITHUB_OUTPUT"
 
       - name: Restore and verify signing key
-        if: steps.existing.outputs.skip == 'false'
+        if: steps.version.outputs.skip == 'false'
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -115,7 +87,7 @@ jobs:
           echo "Signing key verified."
 
       - name: Build signed release APK
-        if: steps.existing.outputs.skip == 'false'
+        if: steps.version.outputs.skip == 'false'
         env:
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.p12
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -129,7 +101,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/release.p12"
 
       - name: Verify APK signature and metadata
-        if: steps.existing.outputs.skip == 'false'
+        if: steps.version.outputs.skip == 'false'
         env:
           VERSION_CODE: ${{ steps.version.outputs.code }}
           VERSION_NAME: ${{ steps.version.outputs.name }}
@@ -150,18 +122,17 @@ jobs:
           echo "$badging" | grep -q "versionCode='${VERSION_CODE}' versionName='${VERSION_NAME}'"
 
       - name: Prepare release files
-        if: steps.existing.outputs.skip == 'false'
+        if: steps.version.outputs.skip == 'false'
         env:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
         run: |
           mkdir -p dist
           apk="AndroidWebCam-${TAG}.apk"
           cp app/build/outputs/apk/release/app-release.apk "dist/${apk}"
           (cd dist && sha256sum "${apk}" > SHA256SUMS.txt)
           sha=$(cut -d ' ' -f 1 dist/SHA256SUMS.txt)
-          previous=$(git describe --tags --abbrev=0 --match 'v*' 2> /dev/null || true)
-          if [ -n "$previous" ]; then range="${previous}..HEAD"; else range="HEAD"; fi
           {
             echo "## Android WebCam ${TAG}"
             echo
@@ -173,27 +144,31 @@ jobs:
             echo "- 签名证书 SHA-256 / Signing certificate: \`${EXPECTED_CERT_SHA256}\`"
             echo
             echo "### 更新内容 / Changes"
-            git log --no-merges --pretty='- %s' "$range" | head -n 60
+            echo
+            # This version's section of CHANGELOG.md (its headings one level lower).
+            awk -v heading="## [${VERSION_NAME}]" 'index($0, heading) == 1 { found = 1; next } found && /^## \[/ { exit } found { print }' \
+              CHANGELOG.md | sed 's/^### /#### /'
             echo
             echo "<sub>commit ${GITHUB_SHA}</sub>"
           } > dist/notes.md
           cat dist/notes.md
 
       - name: Create draft release
-        if: steps.existing.outputs.skip == 'false'
+        if: steps.version.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          gh release create "$TAG" dist/*.apk dist/SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft \
-            --title "Android WebCam ${TAG}" --notes-file dist/notes.md
-          # Older drafts were superseded by this build and are never published.
+          # Unpublished drafts (including an earlier build of this version whose tests failed) are
+          # superseded by this build; published releases are never touched.
           gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft \
-            --jq ".[] | select(.isDraft and .tagName != \"${TAG}\") | .tagName" |
+            --jq '.[] | select(.isDraft) | .tagName' |
             while read -r old; do
               echo "Deleting superseded draft ${old}"
               gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes
             done
+          gh release create "$TAG" dist/*.apk dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft \
+            --title "Android WebCam ${TAG}" --notes-file dist/notes.md
           echo "Draft ${TAG} created. Publish it after local tests pass."
 

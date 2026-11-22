@@ -91,14 +91,32 @@ GitHub Actions 在发版时会强制校验这个指纹，不一致就拒绝发�
 
 发版流程：**签名 → 出安装包 → 生成 Release 草稿 → 本地测试通过 → 正式发布**。GitHub Actions 只负责构建、签名和发版，不在 Actions 里跑测试。
 
-1. `main` 分支上有会进入 APK 的改动（`app/src/main`、`core/src/main`、Gradle 配置、`VERSION`、工作流本身）时，自动运行 [`release.yml`](.github/workflows/release.yml)：构建 release APK → 用仓库 Secrets 里的密钥签名 → 校验签名证书指纹和版本号 → 创建 **Release 草稿**（附 APK 和 `SHA256SUMS.txt`，草稿不公开，旧的未发布草稿会被删除）。只改测试或文档不会触发；也可以在 Actions 页面手动运行。
+1. `main` 分支上有会进入 APK 的改动（`app/src/main`、`core/src/main`、Gradle 配置、`VERSION`、工作流本身）时，自动运行 [`release.yml`](.github/workflows/release.yml)：检查版本号规范 → 构建 release APK → 用仓库 Secrets 里的密钥签名 → 校验签名证书指纹和版本号 → 创建 **Release 草稿**（附 APK 和 `SHA256SUMS.txt`，更新内容取自 `CHANGELOG.md`；草稿不公开，旧的未发布草稿会被删除）。只改测试或文档不会触发；也可以在 Actions 页面手动运行。
 2. 在开发环境（Claude 的云端开发环境，不是用户的电脑或手机）中对同一个提交执行全部测试，其中包括 **Android 11 模拟器端到端测试**（见下方“测试”）。
-3. 测试全部通过后，由开发环境运行 [`publish-release.yml`](.github/workflows/publish-release.yml)（“Publish tested release”，输入版本号，如 `v1.0.2`）：它会重新下载草稿里的 APK，核对 SHA‑256 和签名证书指纹，然后把草稿转为正式 Release（此时才创建 tag、对外可见）。测试不通过的草稿不会发布，修复后的新草稿会替换它。
+3. 测试全部通过后，由开发环境运行 [`publish-release.yml`](.github/workflows/publish-release.yml)（“Publish tested release”，输入版本号，如 `v1.2.0`）：它会重新下载草稿里的 APK，核对 SHA‑256 和签名证书指纹，然后把草稿转为正式 Release（此时才创建 tag、对外可见）。测试不通过的草稿不会发布，修复后的新草稿会替换它。
 
-- 版本号：`VERSION` 文件里的主次版本 + versionCode，例如 `1.0.37`。versionCode 取 `main` 分支的提交数，但绝不会小于已发布的最大值（即使改写过历史），保证每次更新都能覆盖安装；同一个提交不会重复发版。要升级主次版本，修改 `VERSION` 即可。
+- 版本号：见下方“版本号规范”。
 - **不占用 Actions 存储额度**：不使用 Actions 缓存、不上传构建产物（artifact），APK 只发布到 Releases（Release 附件不计入 Actions 存储额度）。仓库是公开的，GitHub 托管运行器的分钟数也不收费。
 - 需要的仓库 Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`（PKCS12，别名 `androidwebcam`）。密钥只保存在 GitHub Secrets 中，请勿提交到仓库（`.gitignore` 已屏蔽常见密钥文件）。
 - 依赖尽量少：AndroidX/Compose（Google）+ ZXing core（本地生成二维码）；HTTP/TLS/WebSocket 服务器是自己实现的，没有引入第三方网络库。Gradle Wrapper 和 Actions 均做了校验/固定版本。
+
+## 版本号规范
+
+版本号采用[语义化版本](https://semver.org/lang/zh-CN/)：`主版本.次版本.修订号`（例如 `1.2.0`），写在仓库根目录的 [`VERSION`](VERSION) 文件里，发布的 tag 是 `v1.2.0`。每次发布按改动的性质升级其中一位：
+
+| 改动 | 升级 | 例子 |
+| --- | --- | --- |
+| 只修 bug、提升稳定性或性能、小的文案/翻译修正 | 修订号：1.2.0 → 1.2.1 | 修复某些手机上的黑屏 |
+| 新功能或明显的行为变化，并且兼容旧版本：旧设置、观看页面、AI 连接工具的配置、覆盖升级都照常可用 | 次版本：1.2.1 → 1.3.0（修订号归零） | 新增“让 AI 看到画面” |
+| 不兼容的变化：提高最低 Android 版本、升级后需要重新设置（设置被重置、要重新配置 AI 连接工具）、旧版连接工具不能再用、移除功能 | 主版本：1.3.0 → 2.0.0（其余归零） | 最低要求改为 Android 12 |
+| 只改测试、工具或文档，APK 不变 | 不发版 | |
+
+- 一次发布包含多种改动时，按最高的那一级升级。
+- 正式发布后，这个版本号不再使用。草稿测试没通过时，修复后仍用同一个版本号，新草稿会替换旧草稿。
+- 每个版本都要在 [`CHANGELOG.md`](CHANGELOG.md) 写一段面向用户的中文更新说明，Release 页面的“更新内容”就取自这里。
+- versionCode（安卓用来判断能否覆盖升级的内部编号）由版本号算出：`主版本 × 1000000 + 次版本 × 1000 + 修订号`，例如 1.2.3 → 1002003。版本号只增不减，versionCode 也就只增不减，新版本总能覆盖安装旧版本。这套规范之前发布的 v1.0.3、v1.0.7、v1.0.10，versionCode 分别是 3、7、10，都更小。
+- 这些规则由 [`tools/release-version.sh`](tools/release-version.sh) 自动检查：APK 有改动但没升版本号、版本号变小、格式不对或缺少更新说明时，GitHub Actions 不会生成草稿，本地验证脚本也会失败。
+- 包名（`app.androidwebcam`）和签名密钥永远不变，与版本号无关。
 
 本地构建：
 
