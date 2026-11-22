@@ -1,0 +1,9 @@
+{
+  "name": "awc-relay",
+  "private": true,
+  "description": "Android WebCam cloud relay (Cloudflare Worker). Wrangler is only used for local tests.",
+  "type": "module",
+  "devDependencies": {
+    "wrangler": "4.166.0"
+  }
+}

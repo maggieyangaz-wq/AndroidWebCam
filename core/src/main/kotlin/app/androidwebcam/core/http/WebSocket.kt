@@ -6,7 +6,7 @@ import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.Base64
 
-/** RFC 6455 server-side helpers (no extensions, no fragmentation from clients). */
+/** RFC 6455 helpers (no extensions, no fragmentation): the server side, and the phone's relay client. */
 object WebSocket {
     private const val GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     const val OP_CONTINUATION = 0x0
@@ -84,6 +84,50 @@ object WebSocket {
         val payload = ByteArray(length.toInt())
         HttpParser.readFully(input, payload)
         for (i in payload.indices) payload[i] = (payload[i].toInt() xor mask[i and 3].toInt()).toByte()
+        return Frame(fin, opcode, payload)
+    }
+
+    /** Writes one masked client-to-server frame (used by the phone's relay connection). */
+    fun writeMaskedFrame(out: OutputStream, opcode: Int, payload: ByteArray, random: java.security.SecureRandom) {
+        val length = payload.size.toLong()
+        val header = when {
+            length < 126 -> byteArrayOf((0x80 or opcode).toByte(), (0x80 or length.toInt()).toByte())
+            length < 65536 -> byteArrayOf((0x80 or opcode).toByte(), (0x80 or 126).toByte(), (length ushr 8).toByte(), length.toByte())
+            else -> ByteArray(10).also {
+                it[0] = (0x80 or opcode).toByte()
+                it[1] = (0x80 or 127).toByte()
+                for (i in 0 until 8) it[2 + i] = (length ushr (56 - 8 * i)).toByte()
+            }
+        }
+        val mask = ByteArray(4).also(random::nextBytes)
+        val masked = ByteArray(payload.size)
+        for (i in payload.indices) masked[i] = (payload[i].toInt() xor mask[i and 3].toInt()).toByte()
+        out.write(header)
+        out.write(mask)
+        out.write(masked)
+    }
+
+    /** Reads one server-to-client frame (servers must not mask), size-limited. */
+    fun readServerFrame(input: InputStream, maxPayload: Int): Frame {
+        val b0 = input.read()
+        val b1 = input.read()
+        if (b0 < 0 || b1 < 0) throw java.io.EOFException("websocket closed")
+        val fin = b0 and 0x80 != 0
+        if (b0 and 0x70 != 0) throw ProtocolException(1002, "reserved bits set")
+        val opcode = b0 and 0x0F
+        if (b1 and 0x80 != 0) throw ProtocolException(1002, "server frames must not be masked")
+        var length = (b1 and 0x7F).toLong()
+        if (length == 126L) {
+            length = ((readByte(input) shl 8) or readByte(input)).toLong()
+        } else if (length == 127L) {
+            length = 0
+            repeat(8) { length = (length shl 8) or readByte(input).toLong() }
+        }
+        val control = opcode and 0x8 != 0
+        if (control && (length > 125 || !fin)) throw ProtocolException(1002, "bad control frame")
+        if (length < 0 || length > maxPayload) throw ProtocolException(1009, "frame too large")
+        val payload = ByteArray(length.toInt())
+        HttpParser.readFully(input, payload)
         return Frame(fin, opcode, payload)
     }
 

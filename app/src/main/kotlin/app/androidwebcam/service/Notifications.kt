@@ -36,14 +36,16 @@ class Notifications(private val context: Context) {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
-    fun streaming(viewers: Int, url: String?): Notification {
+    fun streaming(viewers: Int, url: String?, cloud: Boolean = false): Notification {
         val stop = PendingIntent.getService(
             context, 1,
             Intent(context, StreamingService::class.java).setAction(StreamingService.ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val where = url ?: "—"
-        val text = if (viewers > 0) context.getString(R.string.notif_text_viewers, viewers, where) else context.getString(R.string.notif_text_no_viewers, where)
+        val local = if (viewers > 0) context.getString(R.string.notif_text_viewers, viewers, where) else context.getString(R.string.notif_text_no_viewers, where)
+        // Always visible while the phone is connected to the cloud relay.
+        val text = if (cloud) local + " · " + context.getString(R.string.notif_cloud_on) else local
         val publicVersion = NotificationCompat.Builder(context, CHANNEL_STREAM)
             .setSmallIcon(R.drawable.ic_stat_stream)
             .setContentTitle(context.getString(R.string.notif_public))

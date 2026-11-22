@@ -92,6 +92,9 @@ class TlsIdentityStore(context: Context, private val logger: Logger) {
         KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE).apply { initialize(spec) }.generateKeyPair()
     }
 
+    /** Public-key pin of the stored certificate (the phone's key), e.g. to configure a cloud relay. */
+    fun savedPublicKeyPin(): String? = loadCertificate()?.let { ServerIdentity.pinOf(it) }
+
     private fun loadCertificate(): X509Certificate? = try {
         val bytes = certFile.readFully()
         CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(bytes)) as X509Certificate

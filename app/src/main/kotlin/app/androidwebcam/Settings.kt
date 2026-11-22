@@ -24,6 +24,14 @@ data class StreamSettings(
      * Systems such as OnePlus/OxygenOS end background apps after the screen has been off for a while.
      */
     val keepAwake: Boolean = true,
+    /**
+     * Cloud AI access (off by default): while streaming, one outgoing connection to the user's own
+     * relay, through which cloud agents take single, end-to-end encrypted pictures.
+     */
+    val cloudEnabled: Boolean = false,
+    val cloudRelay: String = "",
+    /** Connect to the relay only over unmetered networks (Wi-Fi, Ethernet). */
+    val cloudWifiOnly: Boolean = true,
 ) {
     fun bitrate(): Int = (quality.bitrateAt30Fps * maxOf(0.6, fps / 30.0)).toInt()
 
@@ -33,6 +41,10 @@ data class StreamSettings(
         val FPS_CHOICES = listOf(15, 24, 30)
         val ORIENTATION_CHOICES = listOf(ORIENTATION_AUTO, 0, 270, 90, 180)
         fun isValidPort(port: Int) = port in 1024..65535
+
+        /** A relay address: https, a host name and nothing else (e.g. https://relay.example.workers.dev). */
+        fun isValidRelay(relay: String): Boolean =
+            Regex("https://[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)+/?").matches(relay.trim())
     }
 }
 
@@ -48,6 +60,9 @@ class SettingsStore(context: Context) {
             orientation = prefs.getInt("orientation", defaults.orientation).takeIf { it in StreamSettings.ORIENTATION_CHOICES } ?: defaults.orientation,
             port = prefs.getInt("port", defaults.port).takeIf { StreamSettings.isValidPort(it) } ?: defaults.port,
             keepAwake = prefs.getBoolean("keep_awake", defaults.keepAwake),
+            cloudEnabled = prefs.getBoolean("cloud_enabled", defaults.cloudEnabled),
+            cloudRelay = prefs.getString("cloud_relay", defaults.cloudRelay).orEmpty(),
+            cloudWifiOnly = prefs.getBoolean("cloud_wifi_only", defaults.cloudWifiOnly),
         )
     }
 
@@ -59,6 +74,9 @@ class SettingsStore(context: Context) {
             putInt("orientation", settings.orientation)
             putInt("port", settings.port)
             putBoolean("keep_awake", settings.keepAwake)
+            putBoolean("cloud_enabled", settings.cloudEnabled)
+            putString("cloud_relay", settings.cloudRelay)
+            putBoolean("cloud_wifi_only", settings.cloudWifiOnly)
         }
     }
 }

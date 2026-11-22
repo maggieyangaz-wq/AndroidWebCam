@@ -16,7 +16,7 @@ Every change that affects the app ends in a published release, in exactly this o
    GitHub MCP tools (`actions_list`, `get_job_logs`, `list_releases`). If it fails, fix and push again.
 3. Test that commit in this environment: `EMULATOR_ACCEL=off tools/verify-release.sh`
    (no KVM here; drop the variable where KVM exists). It runs unit tests + lint, the browser
-   end-to-end test and, on an Android 11 (API 30) emulator, the functional end-to-end test and the
+   end-to-end test, the cloud relay tests (local Workers runtime) and, on an Android 11 (API 30) emulator, the functional end-to-end test and the
    upgrade-install tests (in-place update keeps settings and TLS certificate; release build installs
    over the previous release; downgrade refused). `KEEP_EMULATOR=1` keeps the emulator for reruns.
 4. Only when it ends with `ALL CHECKS PASSED`: run the workflow "Publish tested release"
@@ -39,5 +39,8 @@ Test-only, tool and documentation changes do not create drafts (see the `paths` 
 - No tests in GitHub Actions, no Actions caches or artifacts (APKs go only to Releases).
 - No personal information (user names, GitHub account) in code, package names or the APK.
 - Rear camera only, picture never mirrored; LAN only (mobile data, VPN and loopback refused);
-  no microphone, analytics, ads or outbound connections.
+  no microphone, analytics or ads. No outbound connections, with one opt-in exception: with
+  "cloud AI access" turned on, while streaming, one TLS connection to the user's own relay
+  (`relay/worker.js`); the phone authenticates with its Keystore key and pictures are end-to-end
+  encrypted per cloud agent, so the relay never sees them. Live video never leaves the LAN.
 - Target device: OnePlus Nord N10 5G, Android 11 (API 30); minSdk 29.

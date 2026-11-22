@@ -28,9 +28,7 @@ class ServerIdentity(
      * in the certificate). Unlike the certificate fingerprint it survives certificate re-issues
      * (new LAN address, renewal), which keep the same key; used by the AI bridge on a computer.
      */
-    val publicKeyPin: String = "sha256/" + Base64.getEncoder().encodeToString(
-        MessageDigest.getInstance("SHA-256").digest(subjectPublicKeyInfo(certificate.encoded)),
-    )
+    val publicKeyPin: String = pinOf(certificate)
 
     fun coversAll(addresses: Collection<InetAddress>): Boolean {
         val sans = subjectAltIps(certificate)
@@ -44,6 +42,10 @@ class ServerIdentity(
     companion object {
         fun fingerprint(der: ByteArray): String =
             MessageDigest.getInstance("SHA-256").digest(der).joinToString(":") { String.format("%02X", it) }
+
+        fun pinOf(certificate: X509Certificate): String = "sha256/" + Base64.getEncoder().encodeToString(
+            MessageDigest.getInstance("SHA-256").digest(subjectPublicKeyInfo(certificate.encoded)),
+        )
 
         /** The SubjectPublicKeyInfo element of a DER X.509 certificate, byte for byte (not re-encoded). */
         fun subjectPublicKeyInfo(der: ByteArray): ByteArray {

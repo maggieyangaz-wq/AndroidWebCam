@@ -29,6 +29,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.androidwebcam.camera.BackCameras
+import app.androidwebcam.core.cloud.CloudInstructions
+import app.androidwebcam.security.CloudAgentStore
+import app.androidwebcam.security.TlsIdentityStore
 import app.androidwebcam.service.ErrorKind
 import app.androidwebcam.service.Phase
 import app.androidwebcam.service.StreamController
@@ -41,6 +44,7 @@ import app.androidwebcam.ui.MainScreen
 class MainActivity : ComponentActivity() {
     private lateinit var settingsStore: SettingsStore
     private var batteryOk by mutableStateOf(true)
+    private var phonePin by mutableStateOf<String?>(null)
 
     /**
      * Black-screen standby: the display stays on (lowest brightness, nothing drawn), so systems
@@ -79,6 +83,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             var settings by remember { mutableStateOf(settingsStore.load()) }
             val state by StreamController.state.collectAsStateWithLifecycle()
+            val cloudAgents by CloudAgentStore.get(this).agents.collectAsStateWithLifecycle()
             val streaming = state.phase == Phase.RUNNING
             LaunchedEffect(streaming, settings.keepAwake) { applyKeepAwake(streaming && settings.keepAwake) }
             BackHandler(enabled = blackout) { exitBlackout() }
@@ -99,6 +104,16 @@ class MainActivity : ComponentActivity() {
                         onStart = ::startStreaming,
                         onStop = { StreamingService.stop(this) },
                         onEnterBlackout = ::enterBlackout,
+                        cloudAgents = cloudAgents,
+                        phonePin = phonePin,
+                        onCreateCloudAgent = { name ->
+                            val credential = CloudAgentStore.get(this).create(name)
+                            val chinese = resources.configuration.locales[0].language == "zh"
+                            CloudInstructions.text(settings.cloudRelay, credential, chinese)
+                        },
+                        onRevokeCloudAgent = { id -> CloudAgentStore.get(this).revoke(id) },
+                        onCopyText = ::copyText,
+                        onShareText = ::shareText,
                     )
                 }
             }
@@ -107,6 +122,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        phonePin = TlsIdentityStore(this, AndroidLogger).savedPublicKeyPin()
         batteryOk = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
     }
 
@@ -171,6 +187,21 @@ class MainActivity : ComponentActivity() {
         }
         WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
         if (keepAwakeActive) scheduleAutoBlackout()
+    }
+
+    /** Secrets (cloud agent instructions) are marked sensitive, so the clipboard preview hides them. */
+    private fun copyText(text: String) {
+        val clip = android.content.ClipData.newPlainText(getString(R.string.app_name), text)
+        if (Build.VERSION.SDK_INT >= 33) {
+            clip.description.extras = android.os.PersistableBundle().apply { putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true) }
+        }
+        getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(clip)
+        android.widget.Toast.makeText(this, R.string.toast_copied, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    private fun shareText(text: String) {
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+        startActivity(Intent.createChooser(send, null))
     }
 
     private fun hasCameraPermission() = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED

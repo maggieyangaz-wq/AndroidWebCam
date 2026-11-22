@@ -1,0 +1,17 @@
+# Cloud relay for Android WebCam (see README, "云端 AI 访问"). The phone's public-key pin is set as
+# the PHONE_PIN variable when deploying (never in this file); locally: --var PHONE_PIN:sha256/...
+name = "awc-relay"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[observability]
+enabled = false
+
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "PhoneHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PhoneHub"]

@@ -1,6 +1,8 @@
 package app.androidwebcam.service
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -15,12 +17,15 @@ import app.androidwebcam.core.Orientation
 import app.androidwebcam.core.auth.AccessControl
 import app.androidwebcam.core.auth.AiKeys
 import app.androidwebcam.core.auth.SecurityEvent
+import app.androidwebcam.core.cloud.RelayClient
 import app.androidwebcam.core.server.WebCamServer
 import app.androidwebcam.core.stream.StreamHub
 import app.androidwebcam.core.tls.IdentityKeyManager
 import app.androidwebcam.encoder.VideoPipeline
 import app.androidwebcam.net.LanNetworkMonitor
 import app.androidwebcam.security.AiKeyStore
+import app.androidwebcam.security.CloudAgentStore
+import app.androidwebcam.security.PhoneRelayIdentity
 import app.androidwebcam.security.TlsIdentityStore
 import java.net.BindException
 import java.util.concurrent.Executors
@@ -53,6 +58,12 @@ class StreamSession(
     @Volatile private var pipeline: VideoPipeline? = null
     private var orientationListener: OrientationEventListener? = null
     @Volatile private var stopped = false
+    private val cloudAgents = CloudAgentStore.get(context)
+    @Volatile private var relay: RelayClient? = null
+    // Created or revoked cloud agents: tell the relay at once (off the caller's thread: network I/O).
+    private val onCloudAgentsChanged: () -> Unit = {
+        relay?.let { client -> Thread({ client.agentsChanged() }, "awc-relay-agents").apply { isDaemon = true }.start() }
+    }
 
     fun start() {
         StreamController.update { StreamState(phase = Phase.STARTING, port = settings.port) }
@@ -156,6 +167,7 @@ class StreamSession(
                     zoomMax = camera.zoomMax,
                     zoom = 1f,
                     aiKeys = keys.list().toInfo(),
+                    phonePin = identity.publicKeyPin,
                 )
             }
             main.post {
@@ -165,6 +177,7 @@ class StreamSession(
                 schedulePairingRefresh()
                 host.onViewerCountChanged(0, primaryUrl())
             }
+            if (settings.cloudEnabled && StreamSettings.isValidRelay(settings.cloudRelay) && !stopped) startRelay(hub, km)
         } catch (e: Exception) {
             logger.e("start failed", e)
             fail(ErrorKind.OTHER, e.message ?: e.javaClass.simpleName)
@@ -305,7 +318,8 @@ class StreamSession(
     fun disconnectAllAndRotateCode() {
         val ac = access ?: return
         ac.revokeAll()
-        aiKeys?.revokeAll() // "disconnect all" also ends AI access
+        aiKeys?.revokeAll() // "disconnect all" also ends AI access, in the network and in the cloud
+        cloudAgents.revokeAll()
         server?.disconnectAllViewers()
         StreamController.update { it.copy(accessCode = ac.displayCode, pairingToken = ac.issuePairingToken()) }
         schedulePairingRefresh()
@@ -324,7 +338,10 @@ class StreamSession(
         orientationListener?.disable()
         orientationListener = null
         network?.stop()
+        cloudAgents.removeListener(onCloudAgentsChanged)
         worker.execute {
+            try { relay?.stop() } catch (_: Exception) {}
+            relay = null
             try { server?.stop() } catch (_: Exception) {}
             try { pipeline?.stop() } catch (_: Exception) {}
             access?.revokeAll()
@@ -332,6 +349,57 @@ class StreamSession(
             pipeline = null
         }
         worker.shutdown()
+    }
+
+    // ---------------------------------------------------------------- cloud relay
+
+    /**
+     * The only outgoing connection the app ever makes, and only with cloud access turned on: to the
+     * user's own relay. The phone signs the relay's challenge with its TLS key (Android Keystore).
+     */
+    private fun startRelay(hub: StreamHub, km: IdentityKeyManager) {
+        val identity = PhoneRelayIdentity { km.identity }
+        val client = RelayClient(
+            settings.cloudRelay,
+            identity,
+            cloudAgents.directory,
+            camera = { takePicture(hub) },
+            listener = object : RelayClient.Listener {
+                override fun onStatus(status: RelayClient.Status, detail: String?) {
+                    if (stopped) return
+                    StreamController.update { if (it.phase == Phase.RUNNING) it.copy(cloudStatus = status, cloudDetail = detail) else it }
+                    main.post { if (!stopped) host.onViewerCountChanged(server?.currentViewers()?.size ?: 0, primaryUrl()) }
+                }
+
+                override fun onPicture(agentId: String) {
+                    val record = SnapshotRecord("cloud", "Cloud · " + (cloudAgents.nameOf(agentId) ?: agentId), System.currentTimeMillis())
+                    StreamController.update { it.copy(snapshotCount = it.snapshotCount + 1, lastSnapshot = record) }
+                }
+            },
+            logger = logger,
+            canConnect = { !settings.cloudWifiOnly || onUnmeteredNetwork() },
+        )
+        relay = client
+        cloudAgents.addListener(onCloudAgentsChanged)
+        StreamController.update { it.copy(cloudStatus = RelayClient.Status.CONNECTING) }
+        client.start()
+    }
+
+    /** One fresh picture for a cloud agent (JPEG encoding runs only for that moment). */
+    private fun takePicture(hub: StreamHub): ByteArray? {
+        val subscription = hub.subscribeMjpeg()
+        return try {
+            subscription.next(10_000)
+        } finally {
+            subscription.close()
+        }
+    }
+
+    private fun onUnmeteredNetwork(): Boolean {
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) &&
+            (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
     }
 
     private companion object {

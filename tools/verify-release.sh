@@ -3,7 +3,7 @@
 # publish the draft only if it ends with "ALL CHECKS PASSED". Steps:
 #   0. version convention (VERSION raised for APK changes, CHANGELOG.md entry; README "版本号规范")
 #   1. unit tests (core + app) and Android Lint
-#   2. browser end-to-end test of the viewer page
+#   2. browser end-to-end test of the viewer page, and the cloud relay (tools/run-relay-tests.sh)
 #   3. Android 11 emulator: functional end-to-end test and upgrade-install tests
 # Without KVM: EMULATOR_ACCEL=off tools/verify-release.sh
 set -euo pipefail
@@ -18,6 +18,9 @@ echo "== Unit tests and Android Lint"
 
 echo "== Browser end-to-end test"
 bash tools/run-browser-tests.sh
+
+echo "== Cloud relay (local Workers runtime)"
+bash tools/run-relay-tests.sh
 
 echo "== Android emulator tests"
 bash tools/run-device-tests.sh

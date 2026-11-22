@@ -2,6 +2,7 @@
 # Android emulator tests for a release candidate (default: Android 11 / API 30, like the target phone):
 #   1. functional end-to-end test (StreamingDeviceTest): service, camera, GL, H.264, MJPEG and the
 #      TLS 1.3 server with its Keystore key, used over the device's LAN address like a browser;
+#      cloud access (CloudDeviceTest): Keystore signature for the relay, protected agent keys;
 #   2. upgrade install keeps data (UpgradeDeviceTest, debug build N -> N+1 with `adb install -r`):
 #      in-place update, settings kept, same TLS certificate, streaming still works;
 #   3. a release build installs over the previous release (built from the latest v* tag) and
@@ -184,7 +185,7 @@ install_apk "$WORK/debug-test.apk" || fail "install test APK"
 # ------------------------------------------------------------------------------ 1
 log "1/3 Functional end-to-end test"
 "$ADB" logcat -c || true
-instrument app.androidwebcam.StreamingDeviceTest || fail "functional end-to-end test"
+instrument app.androidwebcam.StreamingDeviceTest,app.androidwebcam.CloudDeviceTest || fail "functional end-to-end test"
 
 # ------------------------------------------------------------------------------ 2
 log "2/3 Upgrade install keeps settings and TLS identity (debug 100 -> 101)"

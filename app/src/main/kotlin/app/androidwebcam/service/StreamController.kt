@@ -2,6 +2,7 @@ package app.androidwebcam.service
 
 import android.annotation.SuppressLint
 import android.view.Surface
+import app.androidwebcam.core.cloud.RelayClient
 import app.androidwebcam.core.server.WebCamServer
 import app.androidwebcam.net.LanNetworkMonitor
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,6 +46,11 @@ data class StreamState(
     val snapshotCount: Int = 0,
     val lastSnapshot: SnapshotRecord? = null,
     val aiKeys: List<AiKeyInfo> = emptyList(),
+    /** Connection to the cloud relay (null: cloud access is off for this session). */
+    val cloudStatus: RelayClient.Status? = null,
+    /** The phone key's pin (set up on the cloud relay), known while streaming. */
+    val phonePin: String? = null,
+    val cloudDetail: String? = null,
 )
 
 /**

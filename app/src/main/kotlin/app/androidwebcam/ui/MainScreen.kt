@@ -84,6 +84,12 @@ fun MainScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onEnterBlackout: () -> Unit,
+    cloudAgents: List<app.androidwebcam.security.CloudAgentStore.Info>,
+    phonePin: String?,
+    onCreateCloudAgent: (String) -> String,
+    onRevokeCloudAgent: (String) -> Unit,
+    onCopyText: (String) -> Unit,
+    onShareText: (String) -> Unit,
 ) {
     val state by StreamController.state.collectAsStateWithLifecycle()
     val active = state.phase == Phase.RUNNING || state.phase == Phase.STARTING
@@ -122,6 +128,10 @@ fun MainScreen(
             }
             KeepAliveCard(settings, onSettingsChange, batteryOk, onePlusFamily, onRequestBatteryExemption)
             SettingsCard(settings, cameras, enabled = !active, onSettingsChange)
+            CloudCard(
+                settings, editable = !active, state, cloudAgents, phonePin ?: state.phonePin,
+                onSettingsChange, onCreateCloudAgent, onRevokeCloudAgent, onCopyText, onShareText,
+            )
             InfoCard(stringResource(R.string.section_privacy)) {
                 Text(stringResource(R.string.privacy_points), style = MaterialTheme.typography.bodyMedium)
             }
@@ -218,7 +228,7 @@ private fun ErrorCard(state: StreamState) {
 }
 
 @Composable
-private fun InfoCard(title: String, content: @Composable () -> Unit) {
+internal fun InfoCard(title: String, content: @Composable () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

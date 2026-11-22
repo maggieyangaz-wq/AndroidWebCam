@@ -118,7 +118,10 @@ class StreamingService : Service(), StreamSession.Host {
 
     // StreamSession.Host
     override fun onViewerCountChanged(viewers: Int, url: String?) {
-        if (session != null) notifications.update(Notifications.ID_STREAMING, notifications.streaming(viewers, url))
+        if (session != null) {
+            val cloud = StreamController.state.value.cloudStatus == app.androidwebcam.core.cloud.RelayClient.Status.CONNECTED
+            notifications.update(Notifications.ID_STREAMING, notifications.streaming(viewers, url, cloud))
+        }
     }
 
     override fun onSecurityAlert(text: String) = notifications.securityAlert(text)
