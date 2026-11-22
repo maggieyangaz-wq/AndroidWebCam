@@ -88,7 +88,10 @@ class StreamingDeviceTest {
             // Keep-awake: the screen never times out while streaming, and after the idle delay the
             // app switches to the black standby screen at the lowest brightness. Everything below
             // runs while the screen is black, proving that streaming continues in standby.
-            assertTrue("screen kept on while streaming", windowFlags(activity) and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0)
+            // (applied by the UI after it has seen the new state, i.e. a frame or two later)
+            waitUntil(t(10_000), "screen kept on while streaming") {
+                main.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
+            }
             waitUntil(t(30_000), "automatic black-screen standby") { main.blackout }
             assertEquals(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF, brightness(activity), 0f)
             log("keep-awake: screen on, black standby at lowest brightness")
