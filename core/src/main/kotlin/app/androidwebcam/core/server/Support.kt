@@ -126,7 +126,7 @@ internal class StaticAssets private constructor(private val files: Map<String, A
             "index.html" to "text/html; charset=utf-8",
             "app.js" to "text/javascript; charset=utf-8",
             "style.css" to "text/css; charset=utf-8",
-            "favicon.svg" to "image/svg+xml",
+            "favicon.png" to "image/png",
             WebCamServer.AI_BRIDGE to "text/javascript; charset=utf-8",
         )
 

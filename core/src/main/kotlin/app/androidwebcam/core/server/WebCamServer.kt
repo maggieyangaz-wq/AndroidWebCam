@@ -257,7 +257,7 @@ class WebCamServer(
         val method = x.request.method
         return when (val path = x.request.path) {
             "/", "/index.html" -> onlyGet(x) { serveAsset(x, "index.html") }
-            "/app.js", "/style.css", "/favicon.svg" -> onlyGet(x) { serveAsset(x, path.substring(1)) }
+            "/app.js", "/style.css", "/favicon.png" -> onlyGet(x) { serveAsset(x, path.substring(1)) }
             "/$AI_BRIDGE" -> onlyGet(x) { serveAsset(x, AI_BRIDGE, download = true) }
             "/robots.txt" -> onlyGet(x) { respond(x, HttpResponse(200).text("User-agent: *\nDisallow: /\n")) }
             "/api/status" -> onlyGet(x) { status(x) }

@@ -95,6 +95,12 @@ curl -fsS --tlsv1.3 -k --pinnedpubkey "sha256//…" -H "Authorization: Bearer aw
 - **传输格式**：首选 H.264 硬件编码 + WebSocket + 浏览器 WebCodecs 解码（比 MJPEG 省 5~10 倍流量、更省电、手机不发烫）；没有 WebCodecs 的老浏览器自动回退到 MJPEG。没有采用 WebRTC，是为了避免引入十几 MB 的原生库和 ICE/STUN 带来的额外攻击面。
 - **画面方向**：后置摄像头画面本身就不是镜像的；应用只对画面做旋转（数学上不可能产生镜像），网页端也只做缩放，不做任何翻转。
 
+## 图标
+
+App 图标的原图是 [`design/app-icon.png`](design/app-icon.png)。修改原图后运行 `python3 tools/make-icons.py`（需要 Pillow 和 numpy），会重新生成 App 的自适应图标（各分辨率的前景层和背景层，主体缩放到各种桌面图标形状都不会被裁切的安全区内）和观看网页的图标。
+
+图标中的 Android 机器人源自 Google 创作并分享的作品，依据[知识共享署名 3.0 许可](https://creativecommons.org/licenses/by/3.0/)使用（The Android robot is reproduced or modified from work created and shared by Google and used according to terms described in the Creative Commons 3.0 Attribution License）。
+
 ## 构建与发版（GitHub Actions）
 
 发版流程：**签名 → 出安装包 → 生成 Release 草稿 → 本地测试通过 → 正式发布**。GitHub Actions 只负责构建、签名和发版，不在 Actions 里跑测试。
