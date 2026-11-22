@@ -6,18 +6,28 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.VisibleForTesting
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.androidwebcam.camera.BackCameras
 import app.androidwebcam.service.ErrorKind
 import app.androidwebcam.service.Phase
@@ -25,11 +35,28 @@ import app.androidwebcam.service.StreamController
 import app.androidwebcam.service.StreamState
 import app.androidwebcam.service.StreamingService
 import app.androidwebcam.ui.AppTheme
+import app.androidwebcam.ui.BlackoutScreen
 import app.androidwebcam.ui.MainScreen
 
 class MainActivity : ComponentActivity() {
     private lateinit var settingsStore: SettingsStore
     private var batteryOk by mutableStateOf(true)
+
+    /**
+     * Black-screen standby: the display stays on (lowest brightness, nothing drawn), so systems
+     * like OnePlus/OxygenOS never treat the app as idle background work and streaming continues.
+     */
+    var blackout by mutableStateOf(false)
+        private set
+
+    @VisibleForTesting
+    internal var autoBlackoutDelayMs = 60_000L
+
+    private var keepAwakeActive = false
+    private val idleHandler = Handler(Looper.getMainLooper())
+    private val autoBlackout = Runnable {
+        if (keepAwakeActive && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) enterBlackout()
+    }
 
     private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (hasCameraPermission()) {
@@ -48,21 +75,32 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         settingsStore = SettingsStore(this)
         val cameras = BackCameras.list(this)
+        val onePlusFamily = Build.MANUFACTURER.lowercase() in setOf("oneplus", "oppo", "realme")
         setContent {
             var settings by remember { mutableStateOf(settingsStore.load()) }
+            val state by StreamController.state.collectAsStateWithLifecycle()
+            val streaming = state.phase == Phase.RUNNING
+            LaunchedEffect(streaming, settings.keepAwake) { applyKeepAwake(streaming && settings.keepAwake) }
+            BackHandler(enabled = blackout) { exitBlackout() }
             AppTheme {
-                MainScreen(
-                    settings = settings,
-                    cameras = cameras,
-                    onSettingsChange = {
-                        settings = it
-                        settingsStore.save(it)
-                    },
-                    batteryOk = batteryOk,
-                    onRequestBatteryExemption = ::requestBatteryExemption,
-                    onStart = ::startStreaming,
-                    onStop = { StreamingService.stop(this) },
-                )
+                if (blackout) {
+                    BlackoutScreen(onExit = ::exitBlackout)
+                } else {
+                    MainScreen(
+                        settings = settings,
+                        cameras = cameras,
+                        onSettingsChange = {
+                            settings = it
+                            settingsStore.save(it)
+                        },
+                        batteryOk = batteryOk,
+                        onePlusFamily = onePlusFamily,
+                        onRequestBatteryExemption = ::requestBatteryExemption,
+                        onStart = ::startStreaming,
+                        onStop = { StreamingService.stop(this) },
+                        onEnterBlackout = ::enterBlackout,
+                    )
+                }
             }
         }
     }
@@ -70,6 +108,69 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         batteryOk = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (keepAwakeActive) scheduleAutoBlackout()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Coming back (e.g. after the power button) shows the normal screen again.
+        exitBlackout()
+        idleHandler.removeCallbacks(autoBlackout)
+    }
+
+    override fun onDestroy() {
+        idleHandler.removeCallbacks(autoBlackout)
+        super.onDestroy()
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        if (keepAwakeActive && !blackout) scheduleAutoBlackout()
+    }
+
+    /** While streaming, the screen never times out (OxygenOS caps the timeout at 30 minutes). */
+    private fun applyKeepAwake(on: Boolean) {
+        keepAwakeActive = on
+        if (on) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (!blackout) scheduleAutoBlackout()
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            idleHandler.removeCallbacks(autoBlackout)
+            exitBlackout()
+        }
+    }
+
+    private fun scheduleAutoBlackout() {
+        idleHandler.removeCallbacks(autoBlackout)
+        idleHandler.postDelayed(autoBlackout, autoBlackoutDelayMs)
+    }
+
+    fun enterBlackout() {
+        if (blackout) return
+        blackout = true
+        idleHandler.removeCallbacks(autoBlackout)
+        window.attributes = window.attributes.apply {
+            screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF // lowest backlight
+        }
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    fun exitBlackout() {
+        if (!blackout) return
+        blackout = false
+        window.attributes = window.attributes.apply {
+            screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
+        WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+        if (keepAwakeActive) scheduleAutoBlackout()
     }
 
     private fun hasCameraPermission() = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED

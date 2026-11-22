@@ -50,8 +50,6 @@
     <string name="orientation_180">Portrait, upside down</string>
     <string name="label_port">Port</string>
     <string name="port_invalid">Use a port between 1024 and 65535.</string>
-
-    <string name="section_battery">Keep streaming with the screen off</string>
     <string name="battery_text">OxygenOS may stop apps in the background. Allow Android WebCam to ignore battery optimization so the stream keeps running when the screen is off.</string>
     <string name="battery_button">Allow</string>
 
@@ -83,4 +81,10 @@
     <string name="kind_ethernet">Ethernet</string>
     <string name="kind_other">Local network</string>
     <string name="label_qr_for">QR code for</string>
+    <string name="section_keep_alive">Keep streaming without interruption</string>
+    <string name="keep_awake_label">Keep the screen on while streaming (goes black after 1 minute without touch)</string>
+    <string name="keep_awake_desc">Recommended. Some systems (e.g. OnePlus/OxygenOS) end background apps after the screen has been off for a while. With this on, the screen stays on but black at the lowest brightness and streaming is never ended by the system. Double-tap to return. Don\'t lock the phone with the power button while streaming. Note: the phone does not lock itself while this is on, so keep it in a trusted place.</string>
+    <string name="oneplus_tips">OnePlus / OxygenOS, also recommended:\n• Lock Android WebCam in Recents (open Recents, tap the app card\'s menu → Lock).\n• Settings → Battery → Battery optimization → ⋮ → Advanced optimization: turn off Deep optimization (Adaptive battery on some versions) and Sleep standby optimization.\n• Keep the phone charging when streaming for hours.</string>
+    <string name="action_blackout">Black screen now (keeps streaming)</string>
+    <string name="blackout_hint">Streaming continues · screen kept dark\nDouble-tap to return</string>
 </resources>

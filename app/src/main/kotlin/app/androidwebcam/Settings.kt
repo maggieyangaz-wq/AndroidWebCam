@@ -19,6 +19,11 @@ data class StreamSettings(
     val fps: Int = 30,
     val orientation: Int = ORIENTATION_AUTO,
     val port: Int = DEFAULT_PORT,
+    /**
+     * Keep the screen on while streaming (black, lowest brightness after a minute without touch).
+     * Systems such as OnePlus/OxygenOS end background apps after the screen has been off for a while.
+     */
+    val keepAwake: Boolean = true,
 ) {
     fun bitrate(): Int = (quality.bitrateAt30Fps * maxOf(0.6, fps / 30.0)).toInt()
 
@@ -42,6 +47,7 @@ class SettingsStore(context: Context) {
             fps = prefs.getInt("fps", defaults.fps).takeIf { it in StreamSettings.FPS_CHOICES } ?: defaults.fps,
             orientation = prefs.getInt("orientation", defaults.orientation).takeIf { it in StreamSettings.ORIENTATION_CHOICES } ?: defaults.orientation,
             port = prefs.getInt("port", defaults.port).takeIf { StreamSettings.isValidPort(it) } ?: defaults.port,
+            keepAwake = prefs.getBoolean("keep_awake", defaults.keepAwake),
         )
     }
 
@@ -52,6 +58,7 @@ class SettingsStore(context: Context) {
             putInt("fps", settings.fps)
             putInt("orientation", settings.orientation)
             putInt("port", settings.port)
+            putBoolean("keep_awake", settings.keepAwake)
         }
     }
 }

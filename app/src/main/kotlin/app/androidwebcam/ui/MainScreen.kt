@@ -79,9 +79,11 @@ fun MainScreen(
     cameras: List<BackCamera>,
     onSettingsChange: (StreamSettings) -> Unit,
     batteryOk: Boolean,
+    onePlusFamily: Boolean,
     onRequestBatteryExemption: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onEnterBlackout: () -> Unit,
 ) {
     val state by StreamController.state.collectAsStateWithLifecycle()
     val active = state.phase == Phase.RUNNING || state.phase == Phase.STARTING
@@ -102,6 +104,11 @@ fun MainScreen(
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                 ) { Text(stringResource(R.string.btn_stop), fontSize = 17.sp) }
+                if (state.phase == Phase.RUNNING && settings.keepAwake) {
+                    OutlinedButton(onClick = onEnterBlackout, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.action_blackout))
+                    }
+                }
             } else {
                 Button(onClick = onStart, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                     Text(stringResource(R.string.btn_start), fontSize = 17.sp)
@@ -113,13 +120,8 @@ fun MainScreen(
                 ViewersCard(state)
                 ControlsCard(state)
             }
+            KeepAliveCard(settings, onSettingsChange, batteryOk, onePlusFamily, onRequestBatteryExemption)
             SettingsCard(settings, cameras, enabled = !active, onSettingsChange)
-            if (!batteryOk) {
-                InfoCard(stringResource(R.string.section_battery)) {
-                    Text(stringResource(R.string.battery_text), style = MaterialTheme.typography.bodyMedium)
-                    TextButton(onClick = onRequestBatteryExemption) { Text(stringResource(R.string.battery_button)) }
-                }
-            }
             InfoCard(stringResource(R.string.section_privacy)) {
                 Text(stringResource(R.string.privacy_points), style = MaterialTheme.typography.bodyMedium)
             }
@@ -325,6 +327,33 @@ private fun ViewersCard(state: StreamState) {
             HorizontalDivider()
             Text(stringResource(R.string.label_alerts), style = MaterialTheme.typography.labelLarge)
             for (alert in state.alerts) Text("• $alert", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/** Settings and hints that keep streaming alive on systems that end background apps (OnePlus etc.). */
+@Composable
+private fun KeepAliveCard(
+    settings: StreamSettings,
+    onChange: (StreamSettings) -> Unit,
+    batteryOk: Boolean,
+    onePlusFamily: Boolean,
+    onRequestBatteryExemption: () -> Unit,
+) {
+    InfoCard(stringResource(R.string.section_keep_alive)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.keep_awake_label), modifier = Modifier.weight(1f))
+            Switch(checked = settings.keepAwake, onCheckedChange = { onChange(settings.copy(keepAwake = it)) })
+        }
+        Text(stringResource(R.string.keep_awake_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+        if (!batteryOk) {
+            HorizontalDivider()
+            Text(stringResource(R.string.battery_text), style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = onRequestBatteryExemption) { Text(stringResource(R.string.battery_button)) }
+        }
+        if (onePlusFamily) {
+            HorizontalDivider()
+            Text(stringResource(R.string.oneplus_tips), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

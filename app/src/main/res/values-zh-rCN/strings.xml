@@ -48,8 +48,6 @@
     <string name="orientation_180">竖屏倒置</string>
     <string name="label_port">端口</string>
     <string name="port_invalid">请使用 1024 到 65535 之间的端口。</string>
-
-    <string name="section_battery">熄屏后继续推流</string>
     <string name="battery_text">OxygenOS 可能会在后台停止应用。允许 Android WebCam 忽略电池优化，熄屏后推流才不会中断。</string>
     <string name="battery_button">允许</string>
 
@@ -81,4 +79,10 @@
     <string name="kind_ethernet">以太网</string>
     <string name="kind_other">局域网</string>
     <string name="label_qr_for">二维码对应</string>
+    <string name="section_keep_alive">保持推流不中断</string>
+    <string name="keep_awake_label">推流时保持亮屏（1 分钟无操作自动黑屏）</string>
+    <string name="keep_awake_desc">推荐开启。一加/OxygenOS 等系统会在熄屏较久后结束后台应用。开启后屏幕保持常亮但全黑、亮度最低，推流不会被系统结束；轻点两下即可返回。推流时请不要按电源键锁屏。注意：开启期间手机不会自动锁屏，请把手机放在可信的地方。</string>
+    <string name="oneplus_tips">一加/OxygenOS 额外建议：\n• 在最近任务里锁定 Android WebCam（打开最近任务 → 点应用卡片的菜单 → 锁定）。\n• 设置 → 电池 → 电池优化 → 右上角 ⋮ → 高级优化：关闭“深度优化”（部分版本叫“自适应电池”）和“睡眠待机优化”。\n• 长时间推流时请保持手机充电。</string>
+    <string name="action_blackout">立即黑屏（继续推流）</string>
+    <string name="blackout_hint">推流中 · 屏幕已调暗\n轻点两下返回</string>
 </resources>

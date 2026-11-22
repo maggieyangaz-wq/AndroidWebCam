@@ -7,6 +7,7 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
 import android.os.SystemClock
+import android.view.WindowManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
@@ -71,14 +72,26 @@ class StreamingDeviceTest {
         val activity = instrumentation.startActivitySync(
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
+        val main = activity as MainActivity
         try {
-            instrumentation.runOnMainSync { StreamingService.start(activity) }
+            instrumentation.runOnMainSync {
+                main.autoBlackoutDelayMs = t(3_000) // instead of 1 minute without touch
+                StreamingService.start(activity)
+            }
             val state = waitFor(t(90_000)) {
                 StreamController.state.value.takeIf { it.phase == Phase.RUNNING && it.endpoints.isNotEmpty() && it.streamWidth > 0 }
             }
             log("state: endpoints=${state.endpoints} stream=${state.streamWidth}x${state.streamHeight} hardwareKey=${state.hardwareKey}")
             assertTrue("TLS key must live in the Android Keystore", state.hardwareKey)
             assertTrue("portrait stream expected for orientation 0", state.streamHeight > state.streamWidth)
+
+            // Keep-awake: the screen never times out while streaming, and after the idle delay the
+            // app switches to the black standby screen at the lowest brightness. Everything below
+            // runs while the screen is black, proving that streaming continues in standby.
+            assertTrue("screen kept on while streaming", windowFlags(activity) and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0)
+            waitUntil(t(30_000), "automatic black-screen standby") { main.blackout }
+            assertEquals(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_OFF, brightness(activity), 0f)
+            log("keep-awake: screen on, black standby at lowest brightness")
 
             val host = state.endpoints.first().address.hostAddress!!
             val authority = "$host:${state.port}"
@@ -143,6 +156,11 @@ class StreamingDeviceTest {
 
             assertTrue(StreamController.state.value.viewers.isEmpty() || StreamController.state.value.phase == Phase.RUNNING)
 
+            // Leaving the standby restores the normal brightness; the screen stays on while streaming.
+            instrumentation.runOnMainSync { main.exitBlackout() }
+            assertEquals(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE, brightness(activity), 0f)
+            assertTrue(windowFlags(activity) and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0)
+
             // Loopback (other apps on the phone) is refused before the TLS handshake.
             try {
                 connect(tls, "127.0.0.1", state.port).use { it.request("GET", "/", "127.0.0.1:${state.port}") }
@@ -157,6 +175,29 @@ class StreamingDeviceTest {
     // ------------------------------------------------------------------ helpers
 
     private fun log(message: String) = println("AWC-TEST $message")
+
+    private fun windowFlags(activity: android.app.Activity): Int {
+        var flags = 0
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { flags = activity.window.attributes.flags }
+        return flags
+    }
+
+    private fun brightness(activity: android.app.Activity): Float {
+        var value = 0f
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { value = activity.window.attributes.screenBrightness }
+        return value
+    }
+
+    private fun waitUntil(timeoutMs: Long, what: String, condition: () -> Boolean) {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            var ok = false
+            InstrumentationRegistry.getInstrumentation().runOnMainSync { ok = condition() }
+            if (ok) return
+            Thread.sleep(100)
+        }
+        fail("timeout waiting for $what")
+    }
 
     private fun json(authority: String) = mapOf("Origin" to "https://$authority", "Content-Type" to "application/json")
 
