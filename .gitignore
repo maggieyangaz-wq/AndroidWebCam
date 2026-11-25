@@ -22,6 +22,8 @@ local.properties
 *.apk
 *.aab
 *.idsig
+# Exception: public root certificates the app trusts for the relay (certificates only, no keys).
+!core/src/main/resources/tls/relay-roots.pem
 
 # Test tooling
 node_modules/

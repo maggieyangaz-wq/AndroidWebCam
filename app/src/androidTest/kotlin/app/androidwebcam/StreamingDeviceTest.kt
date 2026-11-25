@@ -11,6 +11,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import app.androidwebcam.core.tls.ServerIdentity
+import app.androidwebcam.core.tls.Tls
+import app.androidwebcam.security.TlsSupport
 import app.androidwebcam.service.Phase
 import app.androidwebcam.service.StreamController
 import app.androidwebcam.service.StreamState
@@ -302,12 +304,12 @@ class StreamingDeviceTest {
             }
 
             try {
-                shell("svc wifi disable")
+                dropLan()
                 val lost = waitFor(t(60_000)) { StreamController.state.value.takeIf { it.accessCode != oldCode } }
                 assertEquals(context.getString(R.string.alert_network_lost), lost.alerts.firstOrNull())
                 log("network lost: new code, endpoints=${lost.endpoints}")
             } finally {
-                restoreWifi()
+                restoreLan()
             }
 
             val back = waitFor(t(60_000)) {
@@ -336,6 +338,22 @@ class StreamingDeviceTest {
     private fun shell(command: String): String {
         val output = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
         return android.os.ParcelFileDescriptor.AutoCloseInputStream(output).use { String(it.readBytes()) }
+    }
+
+    /**
+     * The emulator's LAN is its virtual Wi-Fi; emulator images before Android 7.1 have no Wi-Fi, and
+     * their only network (eth0) is a mobile-data network, which the app refuses. With mobile data
+     * turned off (tools/run-device-tests.sh), eth0 stays up and serves as the LAN instead.
+     */
+    private val wifiLan = Build.VERSION.SDK_INT >= 25
+
+    /** The LAN goes away: Wi-Fi off, or (no Wi-Fi) the emulator's network becomes mobile data again. */
+    private fun dropLan() {
+        shell(if (wifiLan) "svc wifi disable" else "svc data enable")
+    }
+
+    private fun restoreLan() {
+        if (wifiLan) restoreWifi() else shell("svc data disable")
     }
 
     /** Turns Wi-Fi back on; the emulator does not always rejoin its virtual network by itself. */
@@ -402,7 +420,9 @@ class StreamingDeviceTest {
             }
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
         }
-        return SSLContext.getInstance("TLSv1.3").apply { init(null, arrayOf(trust), SecureRandom()) }
+        // Like a browser: TLS 1.3 (on Android 6-9 from the app's bundled Conscrypt, as the server).
+        TlsSupport.install(AndroidLogger)
+        return Tls.context().apply { init(null, arrayOf(trust), SecureRandom()) }
     }
 
     private fun connect(tls: SSLContext, host: String, port: Int): Client {

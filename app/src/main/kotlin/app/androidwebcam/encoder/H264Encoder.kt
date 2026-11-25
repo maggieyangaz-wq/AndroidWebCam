@@ -4,6 +4,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -63,7 +64,9 @@ class H264Encoder(
 
     private fun tryStart(info: MediaCodecInfo, w: Int, h: Int): Boolean {
         val caps = info.getCapabilitiesForType(MIME)
-        val highLevel = caps.profileLevels.filter { it.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileHigh }.maxOfOrNull { it.level }
+        // High profile only where B-frames can be turned off (Android 10+): they add latency and
+        // reorder frames. Before, the encoder's default profile (Baseline) is used.
+        val highLevel = if (Build.VERSION.SDK_INT < 29) null else caps.profileLevels.filter { it.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileHigh }.maxOfOrNull { it.level }
         val attempts = listOfNotNull(highLevel?.let { MediaCodecInfo.CodecProfileLevel.AVCProfileHigh to it }, null to null)
         for ((profile, level) in attempts) {
             val c = MediaCodec.createByCodecName(info.name)
@@ -74,7 +77,7 @@ class H264Encoder(
                     setInteger(MediaFormat.KEY_FRAME_RATE, fps)
                     setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
                     setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
-                    setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0) // lowest latency, in-order output
+                    if (Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0) // lowest latency, in-order output
                     if (profile != null && level != null) {
                         setInteger(MediaFormat.KEY_PROFILE, profile)
                         setInteger(MediaFormat.KEY_LEVEL, level)
@@ -111,11 +114,11 @@ class H264Encoder(
      */
     private fun encodingPlan(): List<Pair<MediaCodecInfo, Pair<Int, Int>>> {
         val all = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
-            info.isEncoder && !info.isAlias && info.supportedTypes.any { it.equals(MIME, ignoreCase = true) }
+            info.isEncoder && (Build.VERSION.SDK_INT < 29 || !info.isAlias) && info.supportedTypes.any { it.equals(MIME, ignoreCase = true) }
         }
         // Hardware first: a hardware encoder at a slightly smaller size beats software encoding
         // (heat, battery, frame rate). Each encoder is tried at its largest supported size.
-        val encoders = all.filter { it.isHardwareAccelerated } + all.filterNot { it.isHardwareAccelerated }
+        val encoders = all.filter { isHardware(it) } + all.filterNot { isHardware(it) }
         val candidates = EncoderSizes.candidates(desired.first, desired.second)
         val plan = ArrayList<Pair<MediaCodecInfo, Pair<Int, Int>>>()
         for (info in encoders) {
@@ -124,6 +127,13 @@ class H264Encoder(
             plan.add(info to size)
         }
         return plan
+    }
+
+    /** Before Android 10 there is no flag: Android's own software encoders are known by name. */
+    private fun isHardware(info: MediaCodecInfo): Boolean {
+        if (Build.VERSION.SDK_INT >= 29) return info.isHardwareAccelerated
+        val name = info.name.lowercase()
+        return !(name.startsWith("omx.google.") || name.startsWith("c2.android.") || name.contains(".sw.") || name.endsWith(".sw"))
     }
 
     fun requestKeyframe() {

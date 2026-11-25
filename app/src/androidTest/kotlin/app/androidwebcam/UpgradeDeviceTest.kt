@@ -3,9 +3,12 @@ package app.androidwebcam
 import android.Manifest
 import android.os.Build
 import android.os.SystemClock
+import androidx.core.content.pm.PackageInfoCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
+import app.androidwebcam.core.tls.Tls
+import app.androidwebcam.security.TlsSupport
 import app.androidwebcam.service.Phase
 import app.androidwebcam.service.StreamController
 import app.androidwebcam.service.StreamState
@@ -67,12 +70,12 @@ class UpgradeDeviceTest {
     fun verifyAfterUpgrade() {
         assumeTrue("run by tools/run-device-tests.sh only", phase == "verify")
         val info = context.packageManager.getPackageInfo(context.packageName, 0)
-        assertEquals("new version installed", args.getString("expectedVersionCode")!!.toLong(), info.longVersionCode)
+        assertEquals("new version installed", args.getString("expectedVersionCode")!!.toLong(), PackageInfoCompat.getLongVersionCode(info))
         assertTrue("in-place update, not a fresh install", info.lastUpdateTime > info.firstInstallTime)
         assertEquals("settings survive the update", EXPECTED_SETTINGS, SettingsStore(context).load())
         val fingerprint = streamOnce()
         assertEquals("TLS certificate survives the update", args.getString("expectedFingerprint"), fingerprint)
-        println("AWC-TEST upgrade verify: versionCode ${info.longVersionCode}, settings and fingerprint kept")
+        println("AWC-TEST upgrade verify: versionCode ${PackageInfoCompat.getLongVersionCode(info)}, settings and fingerprint kept")
     }
 
     /** Starts streaming from the foreground, checks that HTTPS answers, stops; returns the fingerprint. */
@@ -124,7 +127,9 @@ class UpgradeDeviceTest {
             }
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
         }
-        return SSLContext.getInstance("TLSv1.3").apply { init(null, arrayOf(trust), SecureRandom()) }
+        // Like a browser: TLS 1.3 (on Android 6-9 from the app's bundled Conscrypt, as the server).
+        TlsSupport.install(AndroidLogger)
+        return Tls.context().apply { init(null, arrayOf(trust), SecureRandom()) }
     }
 
     private companion object {

@@ -10,6 +10,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import app.androidwebcam.AndroidLogger
 import app.androidwebcam.SettingsStore
@@ -76,10 +77,10 @@ class StreamingService : Service(), StreamSession.Host {
             acquire(MAX_WAKE_LOCK_MS)
         }
         val wifi = applicationContext.getSystemService(WifiManager::class.java) ?: return
-        val modes = if (Build.VERSION.SDK_INT >= 34) {
-            listOf(WifiManager.WIFI_MODE_FULL_LOW_LATENCY)
-        } else {
-            listOf(WifiManager.WIFI_MODE_FULL_HIGH_PERF, WifiManager.WIFI_MODE_FULL_LOW_LATENCY)
+        val modes = when {
+            Build.VERSION.SDK_INT >= 34 -> listOf(WifiManager.WIFI_MODE_FULL_LOW_LATENCY)
+            Build.VERSION.SDK_INT >= 29 -> listOf(WifiManager.WIFI_MODE_FULL_HIGH_PERF, WifiManager.WIFI_MODE_FULL_LOW_LATENCY)
+            else -> listOf(WifiManager.WIFI_MODE_FULL_HIGH_PERF)
         }
         for (mode in modes) {
             try {
@@ -105,7 +106,7 @@ class StreamingService : Service(), StreamSession.Host {
         session = null
         releaseLocks()
         StreamController.update { if (it.phase == Phase.ERROR) it else StreamState() }
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 

@@ -21,11 +21,15 @@ android {
     defaultConfig {
         // Never change applicationId: upgrades install over the old version only with the same id and key.
         applicationId = "app.androidwebcam"
-        minSdk = 29
+        minSdk = 23
         targetSdk = 36
         versionCode = awcVersionCode
         versionName = awcVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            // Native code: only Conscrypt (Android 6-9). Phones are ARM; x86_64 for the test emulators.
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -36,7 +40,8 @@ android {
                 keyAlias = signingKeyAlias
                 keyPassword = keystorePassword
                 storeType = "PKCS12"
-                enableV1Signing = false
+                // Android 6.0 (API 23) only verifies v1 (JAR) signatures; newer versions use v2/v3.
+                enableV1Signing = true
                 enableV2Signing = true
                 enableV3Signing = true
             }
@@ -59,6 +64,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // java.time, java.util.Base64 etc. before Android 8 (API 26).
+        isCoreLibraryDesugaringEnabled = true
     }
 
     androidResources {
@@ -72,6 +79,8 @@ android {
     }
 
     packaging {
+        // Compressed in the APK (smaller download); the system unpacks it at installation.
+        jniLibs.useLegacyPackaging = true
         resources {
             excludes += setOf(
                 "/META-INF/{AL2.0,LGPL2.1}",
@@ -117,6 +126,9 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.material3)
     implementation(libs.zxing.core)
+    // TLS 1.3 on Android 6-9, whose built-in TLS stops at 1.2 (loaded only there, see Tls.provider).
+    implementation(libs.conscrypt.android)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)

@@ -9,10 +9,14 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import app.androidwebcam.core.cloud.Ecdsa
 import app.androidwebcam.core.cloud.RelayClient
+import app.androidwebcam.core.tls.IdentityKeyManager
+import app.androidwebcam.core.tls.SelfSignedCertificate
 import app.androidwebcam.core.tls.ServerIdentity
+import app.androidwebcam.core.tls.Tls
 import app.androidwebcam.security.CloudAgentStore
 import app.androidwebcam.security.PhoneRelayIdentity
 import app.androidwebcam.security.TlsIdentityStore
+import app.androidwebcam.security.TlsSupport
 import app.androidwebcam.service.Phase
 import app.androidwebcam.service.StreamController
 import app.androidwebcam.service.StreamingService
@@ -20,17 +24,26 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.security.KeyFactory
+import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
+import java.security.spec.ECGenParameterSpec
 import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLSocket
+import kotlin.concurrent.thread
 
 /** Cloud AI access on a real Android system (the relay protocol itself: tools/run-relay-tests.sh). */
 @RunWith(AndroidJUnit4::class)
@@ -53,6 +66,55 @@ class CloudDeviceTest {
         StreamingService.stop(context)
         waitUntil(t(20_000)) { StreamController.state.value.phase == Phase.IDLE }
         SettingsStore(context).save(StreamSettings()) // cloud access off again
+    }
+
+    /**
+     * The relay connection's TLS on this Android version (Android 6-9: the bundled Conscrypt and the
+     * bundled root certificates), against a local TLS server named relay.test.
+     */
+    @Test
+    fun relayTlsWorksOnThisAndroidVersion() {
+        TlsSupport.install(AndroidLogger)
+        if (Build.VERSION.SDK_INT < 29) {
+            assertNotNull("bundled TLS 1.3 must be active on Android 6-9", Tls.provider)
+            val issuers = TlsSupport.relayTrust!!.invoke().acceptedIssuers.map { it.subjectX500Principal.name }
+            assertTrue(issuers.any { it.contains("ISRG Root X1") })
+            assertTrue(issuers.any { it.contains("GTS Root R4") })
+            assertTrue("the system's root certificates as well (${issuers.size})", issuers.size > Tls.bundledRelayRoots().size + 50)
+        } else {
+            assertNull("Android 10+ uses the system's TLS", Tls.provider)
+            assertNull(TlsSupport.relayTrust)
+        }
+        val kp = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
+        val cert = SelfSignedCertificate.create(kp.public, SelfSignedCertificate.softwareSigner(kp.private), emptyList(), dnsNames = listOf("relay.test"))
+        val relay = ServerIdentity(kp.private, cert, hardwareBacked = false)
+        val loopback = InetAddress.getByName("127.0.0.1")
+        val server = Tls.context("TLS").apply { init(arrayOf(IdentityKeyManager(relay)), null, null) }
+            .serverSocketFactory.createServerSocket(0, 1, loopback) as SSLServerSocket
+        server.use {
+            val accepted = thread(isDaemon = true) {
+                try {
+                    (server.accept() as SSLSocket).use { s ->
+                        s.soTimeout = t(10_000).toInt()
+                        s.startHandshake()
+                        s.outputStream.write(1)
+                        s.outputStream.flush()
+                        s.inputStream.read()
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            val connector = RelayClient.Connector.tls(
+                connectRaw = { _, port, timeoutMs -> Socket().apply { connect(InetSocketAddress(loopback, port), timeoutMs) } },
+                trust = { Tls.trustManager(listOf(cert)) },
+            )
+            (connector.open("relay.test", server.localPort, t(10_000).toInt()) as SSLSocket).use {
+                assertEquals(1, it.inputStream.read())
+                assertEquals("TLSv1.3", it.session.protocol)
+                it.outputStream.write(2)
+            }
+            accepted.join(t(10_000))
+        }
     }
 
     /** What the relay checks: the pin of the presented key, and a raw P-256 signature over its challenge. */

@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Range
 import android.view.Surface
+import androidx.core.os.HandlerCompat
 import app.androidwebcam.core.Logger
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
@@ -90,7 +91,7 @@ class CameraSource(
     private fun openDevice() {
         if (closed || device != null) return
         try {
-            manager.openCamera(camera.id, executor, stateCallback)
+            if (Build.VERSION.SDK_INT >= 28) manager.openCamera(camera.id, executor, stateCallback) else manager.openCamera(camera.id, stateCallback, handler)
         } catch (e: CameraAccessException) {
             logger.w("openCamera failed", e)
             listener.onCameraProblem(e.reason.toString(), recoverable = true)
@@ -139,28 +140,28 @@ class CameraSource(
 
     private fun createSession(d: CameraDevice) {
         val surface = target ?: return
-        try {
-            val config = SessionConfiguration(
-                SessionConfiguration.SESSION_REGULAR,
-                listOf(OutputConfiguration(surface)),
-                executor,
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(s: CameraCaptureSession) {
-                        if (closed || device !== d) {
-                            s.close()
-                            return
-                        }
-                        session = s
-                        if (applyRequest()) listener.onCameraRunning()
-                    }
+        val callback = object : CameraCaptureSession.StateCallback() {
+            override fun onConfigured(s: CameraCaptureSession) {
+                if (closed || device !== d) {
+                    s.close()
+                    return
+                }
+                session = s
+                if (applyRequest()) listener.onCameraRunning()
+            }
 
-                    override fun onConfigureFailed(s: CameraCaptureSession) {
-                        listener.onCameraProblem("configuration failed", recoverable = true)
-                        retryLater()
-                    }
-                },
-            )
-            d.createCaptureSession(config)
+            override fun onConfigureFailed(s: CameraCaptureSession) {
+                listener.onCameraProblem("configuration failed", recoverable = true)
+                retryLater()
+            }
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 28) {
+                d.createCaptureSession(SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(OutputConfiguration(surface)), executor, callback))
+            } else {
+                @Suppress("DEPRECATION") // the only way before Android 9
+                d.createCaptureSession(listOf(surface), callback, handler)
+            }
         } catch (e: Exception) {
             logger.w("createCaptureSession failed", e)
             listener.onCameraProblem("session", recoverable = true)
@@ -211,7 +212,7 @@ class CameraSource(
         if (closed) return
         val delay = retryDelayMs
         retryDelayMs = (retryDelayMs * 2).coerceAtMost(10_000L)
-        handler.postDelayed({ openDevice() }, RETRY_TOKEN, delay)
+        HandlerCompat.postDelayed(handler, { openDevice() }, RETRY_TOKEN, delay)
     }
 
     /** Re-opens the camera as soon as the other app releases it. */
@@ -223,11 +224,11 @@ class CameraSource(
                 manager.unregisterAvailabilityCallback(this)
                 availability = null
                 // Give the other app a moment to fully let go before reopening.
-                handler.postDelayed({ openDevice() }, RETRY_TOKEN, 700)
+                HandlerCompat.postDelayed(handler, { openDevice() }, RETRY_TOKEN, 700)
             }
         }
         availability = callback
-        manager.registerAvailabilityCallback(executor, callback)
+        if (Build.VERSION.SDK_INT >= 28) manager.registerAvailabilityCallback(executor, callback) else manager.registerAvailabilityCallback(callback, handler)
     }
 
     private companion object {

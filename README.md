@@ -26,7 +26,9 @@ GitHub Actions 在发版时会强制校验这个指纹，不一致就拒绝发�
 2. 在手机上安装（需要允许“安装未知应用”）。
 3. 以后有更新时，下载新版本直接安装即可**覆盖升级**：包名和签名永远不变，版本号（versionCode）每次只增不减，设置会保留。
 
-最低系统要求 Android 10；开发和测试以 **OnePlus Nord N10 5G（BE2026，骁龙 690，6 GB + 128 GB，Android 11 / OxygenOS 11）** 为准。
+最低系统要求 Android 6.0；开发和测试以 **OnePlus Nord N10 5G（BE2026，骁龙 690，6 GB + 128 GB，Android 11 / OxygenOS 11）** 为准，旧系统以 **红米 3S（骁龙 430，3 GB，Android 6.0.1 / MIUI 10）** 为准。
+
+在 Android 6–9 上：系统自带的 TLS 不支持 TLS 1.3，App 改用随附的 [Conscrypt](https://github.com/google/conscrypt)（Google 的 TLS 库，Android 10 起系统自带的就是它），所以加密方式和新系统完全一样，也不依赖旧系统里早已过时的加密库；H.264 用最基础的 Baseline 档次（避免 B 帧带来的延迟）。小米/MIUI 等会在后台停止应用的系统，请按 App 里“保持推流”卡片的提示设置。旧手机的系统安全补丁往往停在多年前，建议只把它当专用摄像头用，不要在上面登录其他账号。
 
 ## 使用方法
 
@@ -100,7 +102,7 @@ curl -fsS --tlsv1.3 -k --pinnedpubkey "sha256//…" -H "Authorization: Bearer aw
 
 | 方面 | 做法 |
 | --- | --- |
-| 传输加密 | 仅 TLS 1.3（AEAD 加密套件、前向保密），拒绝 TLS 1.2 及以下；没有任何明文 HTTP 端口 |
+| 传输加密 | 仅 TLS 1.3（AEAD 加密套件、前向保密），拒绝 TLS 1.2 及以下；没有任何明文 HTTP 端口；Android 6–9 上用随 App 附带的 Conscrypt 实现同样的 TLS 1.3 |
 | 服务器私钥 | ECDSA P‑256，生成在 Android Keystore（手机安全硬件 TEE）里，**不可导出**；启用前先在内存里完整握手自检 |
 | 证书 | 自签名，满足 Apple/Chrome 的证书规则（SAN、serverAuth、有效期 397 天，自动续期） |
 | 访问控制 | 每次开始推流、以及手机断开网络时生成新的 8 位访问码（40 位随机，同时结束所有会话）；扫码链接为一次性 144 位令牌；同一 IP 连续输错 5 次锁定 30 秒并指数递增；全网累计 20 次错误自动更换访问码；会话令牌 256 位、只存哈希、绑定观看者 IP、HttpOnly + Secure + SameSite=Strict |
@@ -108,7 +110,7 @@ curl -fsS --tlsv1.3 -k --pinnedpubkey "sha256//…" -H "Authorization: Bearer aw
 | 网页防护 | 严格 CSP（无内联脚本、无第三方资源）、禁止被嵌入、校验 Host（防 DNS 重绑定）和 Origin（防 CSRF / 跨站 WebSocket） |
 | 隐私 | 只申请相机权限（**不申请麦克风**、存储、位置）；不录像、不保存；不含广告、统计、崩溃上报等任何第三方 SDK；App 默认从不主动联网，只有开启云端 AI 访问后，推流期间才会连接你自己的中转站 |
 | 手机端 | 禁止截屏/录屏本应用；禁止系统备份和换机迁移；发布版不输出任何日志；不会开机自启，服务被系统杀死后不会自动重启 |
-| 云端 AI 访问（可选，默认关闭） | 只连你配置的中转站（系统证书校验 + 主机名校验）；手机用 Keystore 密钥签名认证；每个云端 agent 的画面端到端加密（中转站看不到），解密密钥在手机上由 Keystore 加密保存；手机和中转站双重限速；可单独撤销 |
+| 云端 AI 访问（可选，默认关闭） | 只连你配置的中转站（证书校验 + 主机名校验；Android 6–9 的系统根证书过旧，另外信任随 App 附带的 Cloudflare 所用证书机构的根证书：Let's Encrypt、Google Trust Services、SSL.com、Sectigo）；手机用 Keystore 密钥签名认证；每个云端 agent 的画面端到端加密（中转站看不到），解密密钥在手机上由 Keystore 加密保存；手机和中转站双重限速；可单独撤销 |
 | AI 访问（可选） | 单张画面需要 AI 访问密钥（绑定一台电脑、可随时撤销、手机只存哈希）或登录；同一设备每秒最多 1 张；手机记录每次取画面；curl 和连接工具都先核对手机公钥 pin，才会发送密钥 |
 | 资源限制 | 最多 4 个观看者、32 个连接（单个设备最多 12 个），请求头必须在 10 秒内收完；严格的 HTTP 解析（长度限制、拒绝分块/重复头）；慢速观看者自动丢帧回到关键帧，不会拖慢别人 |
 
@@ -135,13 +137,13 @@ App 图标的原图是 [`design/app-icon.png`](design/app-icon.png)。修改原�
 发版流程：**签名 → 出安装包 → 生成 Release 草稿 → 本地测试通过 → 正式发布**。GitHub Actions 只负责构建、签名和发版，不在 Actions 里跑测试。
 
 1. `main` 分支上有会进入 APK 的改动（`app/src/main`、`core/src/main`、Gradle 配置、`VERSION`、工作流本身）时，自动运行 [`release.yml`](.github/workflows/release.yml)：检查版本号规范 → 构建 release APK → 用仓库 Secrets 里的密钥签名 → 校验签名证书指纹和版本号 → 创建 **Release 草稿**（附 APK 和 `SHA256SUMS.txt`，更新内容取自 `CHANGELOG.md`；草稿不公开，旧的未发布草稿会被删除）。只改测试或文档不会触发；也可以在 Actions 页面手动运行。
-2. 在开发环境（Claude 的云端开发环境，不是用户的电脑或手机）中对同一个提交执行全部测试，其中包括 **Android 11 模拟器端到端测试**（见下方“测试”）。
+2. 在开发环境（Claude 的云端开发环境，不是用户的电脑或手机）中对同一个提交执行全部测试，其中包括 **Android 11 和 Android 6.0 模拟器端到端测试**（见下方“测试”）。
 3. 测试全部通过后，由开发环境运行 [`publish-release.yml`](.github/workflows/publish-release.yml)（“Publish tested release”，输入版本号，如 `v1.2.0`）：它会重新下载草稿里的 APK，核对 SHA‑256 和签名证书指纹，然后把草稿转为正式 Release（此时才创建 tag、对外可见）。测试不通过的草稿不会发布，修复后的新草稿会替换它。
 
 - 版本号：见下方“版本号规范”。
 - **不占用 Actions 存储额度**：不使用 Actions 缓存、不上传构建产物（artifact），APK 只发布到 Releases（Release 附件不计入 Actions 存储额度）。仓库是公开的，GitHub 托管运行器的分钟数也不收费。
 - 需要的仓库 Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`（PKCS12，别名 `androidwebcam`）。密钥只保存在 GitHub Secrets 中，请勿提交到仓库（`.gitignore` 已屏蔽常见密钥文件）。
-- 依赖尽量少：AndroidX/Compose（Google）+ ZXing core（本地生成二维码）；HTTP/TLS/WebSocket 服务器是自己实现的，没有引入第三方网络库。Gradle Wrapper 和 Actions 均做了校验/固定版本。
+- 依赖尽量少：AndroidX/Compose（Google）+ ZXing core（本地生成二维码）+ Conscrypt（Google，只在 Android 6–9 上加载，提供 TLS 1.3）；HTTP/TLS/WebSocket 服务器是自己实现的，没有引入第三方网络库。Gradle Wrapper 和 Actions 均做了校验/固定版本。
 
 ## 版本号规范
 
@@ -178,10 +180,10 @@ tools/verify-release.sh
 - 单元测试 + Android Lint：证书与 TLS 1.3 握手（含拒绝 TLS 1.2）、HTTP 解析的各种畸形请求、慢速请求和单设备连接上限、WebSocket、登录锁定/一次性二维码/会话、H.264 码流处理、旋转不会镜像、编码器尺寸回退等；Lint 同时检查 core 模块的 API 兼容性。
 - 浏览器端到端测试（`tools/run-browser-tests.sh`）：用测试视频验证网页登录、H.264/MJPEG 播放、WebSocket 不通时自动切换 MJPEG、一次性二维码、CSP 无违规、手机失联（连接还在但没有应答）时几秒内清除画面并显示“信号已断开”（H.264 和 MJPEG）、会话被手机结束后必须用访问码重连、手机在线但没有画面时显示提示、“让 AI 看到画面”面板（生成 AI 访问密钥，并真实运行给 agent 的说明里的 curl 命令取画面）；并像 AI 应用一样测试连接工具 `awc-ai.mjs`（MCP 和 `snap` 命令、AI 密钥、访问码、限速、公钥不匹配和非局域网地址被拒绝）。
 - 云端中转站测试（`tools/run-relay-tests.sh`，在 Cloudflare 的本地运行环境里跑 [`relay/worker.js`](relay/worker.js)）：手机认证（未知手机、伪造签名、重放挑战被拒）、令牌核对、限速、撤销、手机掉线、手机静默失联（连接没关但不再 ping）后判为离线、新连接替换旧连接、未认证连接超时；并用手机端真正的连接客户端和 App 生成的取图命令端到端取图解密，确认中转站只看到密文、旧画面会被拒绝。
-- **Android 11（API 30）模拟器测试**（`tools/run-device-tests.sh`）：
-  1. 功能端到端：真实启动前台服务、相机、GPU 旋转、H.264 编码和 TLS 服务，通过模拟器的局域网地址登录、拉取 H.264 关键帧（并用 Android 解码器解码）和 MJPEG 画面，确认 TLS 私钥在 Android Keystore 中、画面为竖屏、回环连接被拒绝；推流时保持亮屏，无操作后自动进入黑屏待机（亮度最低），上述拉流检查都在黑屏待机状态下进行，退出后亮度恢复；单张画面接口（登录或 AI 访问密钥才能用、竖屏 JPEG、手机记录取画面、撤销后密钥失效）和公钥 pin 与 TLS 密钥一致；在有观看者（H.264、MJPEG）和取画面请求时点“停止推流”，App 不会闪退、正常回到未推流状态；推流中关闭 Wi‑Fi 后会话立即结束、访问码更换，恢复网络后旧会话和旧访问码都被拒绝、新访问码可用；
+- **Android 11（API 30）和 Android 6.0（API 23）模拟器测试**（`tools/run-device-tests.sh`，`API_LEVEL=23` 测 Android 6.0）。Android 6.0 模拟器没有 Wi‑Fi，它唯一的网络是移动数据；测试时关掉移动数据，这个网络就作为局域网（以太网）使用：
+  1. 功能端到端：真实启动前台服务、相机、GPU 旋转、H.264 编码和 TLS 服务，通过模拟器的局域网地址登录、拉取 H.264 关键帧（并用 Android 解码器解码）和 MJPEG 画面，确认 TLS 私钥在 Android Keystore 中、画面为竖屏、回环连接被拒绝；推流时保持亮屏，无操作后自动进入黑屏待机（亮度最低），上述拉流检查都在黑屏待机状态下进行，退出后亮度恢复；单张画面接口（登录或 AI 访问密钥才能用、竖屏 JPEG、手机记录取画面、撤销后密钥失效）和公钥 pin 与 TLS 密钥一致；在有观看者（H.264、MJPEG）和取画面请求时点“停止推流”，App 不会闪退、正常回到未推流状态；推流中关闭 Wi‑Fi（Android 6.0：网络变回移动数据）后会话立即结束、访问码更换，恢复网络后旧会话和旧访问码都被拒绝、新访问码可用；
   2. **覆盖升级安装**：旧版本运行后用 `adb install -r` 安装新版本，确认是原地升级（不是重装）、设置保留、HTTPS 证书指纹不变（升级后浏览器不会再次提示证书）、推流正常；
-  3. **正式版覆盖升级**：用上一个正式发布版本的代码构建旧 APK，新版本覆盖安装成功并能正常启动，且旧版本无法降级覆盖新版本。
+  3. **正式版覆盖升级**：用上一个正式发布版本的代码构建旧 APK（上一个版本不支持该系统时用当前代码），新版本覆盖安装成功并能正常启动，且旧版本无法降级覆盖新版本。
 
 ### 真机测试清单（以 OnePlus Nord N10 5G / Android 11 为准）
 
@@ -198,3 +200,5 @@ tools/verify-release.sh
 11. （可选）电脑浏览器打开 🤖 生成密钥，把说明交给 Codex、Claude Code 等 agent，问“摄像头拍到了什么？”，agent 能描述画面；手机“观看者”卡片显示 AI 访问和取画面记录。
 12. App 底部显示的版本号与 Release 一致。
 13. 观看中关闭手机 Wi‑Fi（或点“停止推流”）：观看页面几秒内显示“信号已断开，需要重新连接”，不会停在最后一帧；重新打开 Wi‑Fi 后手机显示新的访问码，旧访问码无效，输入新访问码后恢复观看。
+
+旧系统（红米 3S / Android 6.0.1）补充检查：安装、开始推流和第 2、3、5、10 项；按“保持推流”卡片的 MIUI 提示设置后，熄屏推流 1 小时以上不中断；推流时手机显示“TLS 私钥保存在手机安全硬件（Android Keystore）中”，重新推流后证书指纹不变。

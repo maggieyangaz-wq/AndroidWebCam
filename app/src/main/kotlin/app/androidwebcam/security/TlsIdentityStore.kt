@@ -32,6 +32,10 @@ import javax.security.auth.x500.X500Principal
 class TlsIdentityStore(context: Context, private val logger: Logger) {
     private val certFile = AtomicFile(File(context.noBackupFilesDir, "tls_server_cert.der"))
 
+    init {
+        TlsSupport.install(logger)
+    }
+
     @Synchronized
     fun obtain(addresses: List<InetAddress>): ServerIdentity {
         try {

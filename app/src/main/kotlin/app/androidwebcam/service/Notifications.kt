@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import app.androidwebcam.MainActivity
@@ -16,6 +17,12 @@ import app.androidwebcam.R
 
 class Notifications(private val context: Context) {
     init {
+        // Android 8+: channels (before, the builders' priorities below apply).
+        if (Build.VERSION.SDK_INT >= 26) createChannels()
+    }
+
+    @RequiresApi(26)
+    private fun createChannels() {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_STREAM, context.getString(R.string.notif_channel_stream), NotificationManager.IMPORTANCE_LOW).apply {
@@ -59,6 +66,7 @@ class Notifications(private val context: Context) {
             .setSilent(true)
             .setShowWhen(false)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_LOW) // Android 6-7; the channel decides on 8+
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion)
             .setContentIntent(openApp())
@@ -89,6 +97,7 @@ class Notifications(private val context: Context) {
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH) // Android 6-7; the channel decides on 8+
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setContentIntent(openApp())
             .build()

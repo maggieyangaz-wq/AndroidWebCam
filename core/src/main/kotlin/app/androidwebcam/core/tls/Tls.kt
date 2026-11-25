@@ -1,22 +1,55 @@
 package app.androidwebcam.core.tls
 
 import java.nio.ByteBuffer
+import java.security.KeyStore
+import java.security.Provider
 import java.security.SecureRandom
 import java.security.cert.CertificateException
+import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLEngineResult.HandshakeStatus
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
 /** TLS policy: TLS 1.3 only (AEAD ciphers with forward secrecy), no client certificates. */
 object Tls {
     const val PROTOCOL = "TLSv1.3"
 
+    /**
+     * The TLS implementation; null = the platform's. Android 6-9 have no TLS 1.3 built in, so there
+     * the app sets its bundled copy of Conscrypt before the first connection.
+     */
+    @Volatile
+    var provider: Provider? = null
+
+    /** An uninitialized context of [protocol] from [provider]. */
+    fun context(protocol: String = PROTOCOL): SSLContext =
+        provider?.let { SSLContext.getInstance(protocol, it) } ?: SSLContext.getInstance(protocol)
+
     fun serverContext(keyManager: IdentityKeyManager, random: SecureRandom = SecureRandom()): SSLContext =
-        SSLContext.getInstance(PROTOCOL).apply { init(arrayOf(keyManager), null, random) }
+        context().apply { init(arrayOf(keyManager), null, random) }
+
+    /**
+     * Standard (PKIX) certificate validation trusting exactly [anchors]: used for the relay on old
+     * Android versions, whose built-in root certificates are outdated.
+     */
+    fun trustManager(anchors: Collection<X509Certificate>): X509TrustManager {
+        require(anchors.isNotEmpty()) { "no trust anchors" }
+        val store = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null) }
+        anchors.forEachIndexed { i, certificate -> store.setCertificateEntry("anchor-$i", certificate) }
+        val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(store) }
+        return factory.trustManagers.filterIsInstance<X509TrustManager>().first()
+    }
+
+    /** Root certificates of the certificate authorities Cloudflare uses for workers.dev (resource tls/relay-roots.pem). */
+    fun bundledRelayRoots(): List<X509Certificate> {
+        val stream = Tls::class.java.getResourceAsStream("/tls/relay-roots.pem") ?: throw IllegalStateException("relay roots missing")
+        return stream.use { CertificateFactory.getInstance("X.509").generateCertificates(it).map { c -> c as X509Certificate } }
+    }
 
     fun hardenServerSocket(socket: SSLServerSocket) {
         socket.enabledProtocols = arrayOf(PROTOCOL)
@@ -48,7 +81,7 @@ object Tls {
             useClientMode = false
             enabledProtocols = arrayOf(PROTOCOL)
         }
-        val clientContext = SSLContext.getInstance(PROTOCOL).apply {
+        val clientContext = context().apply {
             init(null, arrayOf(pinnedTrustManager(certificate)), SecureRandom())
         }
         val client = clientContext.createSSLEngine("awc-self-test", 1).apply {

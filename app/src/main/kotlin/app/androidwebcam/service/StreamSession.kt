@@ -27,6 +27,7 @@ import app.androidwebcam.security.AiKeyStore
 import app.androidwebcam.security.CloudAgentStore
 import app.androidwebcam.security.PhoneRelayIdentity
 import app.androidwebcam.security.TlsIdentityStore
+import app.androidwebcam.security.TlsSupport
 import java.net.BindException
 import java.net.InetAddress
 import java.util.concurrent.Executors
@@ -405,6 +406,7 @@ class StreamSession(
                 }
             },
             logger = logger,
+            connector = RelayClient.Connector.tls(trust = TlsSupport.relayTrust),
             canConnect = { !settings.cloudWifiOnly || onUnmeteredNetwork() },
         )
         relay = client

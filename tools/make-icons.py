@@ -112,7 +112,27 @@ def main():
 
     # Favicon / login logo of the viewer page: the design as drawn, transparent around its frame.
     shape = rounded_rect_mask(side, 0.004 * side, 0.245 * side, 1.5)
-    to_image(np.asarray(source, np.float32), shape).resize((128, 128), Image.LANCZOS).save(FAVICON, optimize=True)
+    drawn = to_image(np.asarray(source, np.float32), shape)
+    drawn.resize((128, 128), Image.LANCZOS).save(FAVICON, optimize=True)
+
+    # Android 6-7 have no adaptive icons (mipmap-anydpi-v26): classic 48 dp icons with a 2 dp margin.
+    # Square: the design as drawn; round: the adaptive icon's visible part in a circle.
+    composite = background_image.convert("RGBA")
+    composite.alpha_composite(foreground_image)
+    crop = int((MASTER - MASTER * 72 / 108) / 2)
+    viewport = composite.crop((crop, crop, MASTER - crop, MASTER - crop))
+    v = viewport.width
+    y, x = np.mgrid[0:v, 0:v].astype(np.float32) + 0.5
+    circle = np.clip(v / 2 - np.hypot(x - v / 2, y - v / 2), 0, 1)
+    viewport.putalpha(Image.fromarray((circle * 255).astype(np.uint8), "L"))
+    for density, px in DENSITIES.items():
+        size = px * 48 // 108
+        inner = size * 44 // 48
+        folder = os.path.join(RES, f"mipmap-{density}")
+        for name, icon in (("ic_launcher", drawn), ("ic_launcher_round", viewport)):
+            canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            canvas.alpha_composite(icon.resize((inner, inner), Image.LANCZOS), ((size - inner) // 2, (size - inner) // 2))
+            canvas.save(os.path.join(folder, f"{name}.webp"), quality=92, method=6)
 
     if len(sys.argv) > 1:  # optional: preview of the launcher icon under common mask shapes
         preview(foreground_image, background_image, sys.argv[1])

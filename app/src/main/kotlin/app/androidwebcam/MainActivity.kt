@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
+import androidx.core.os.ConfigurationCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
@@ -79,7 +80,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         settingsStore = SettingsStore(this)
         val cameras = BackCameras.list(this)
-        val onePlusFamily = Build.MANUFACTURER.lowercase() in setOf("oneplus", "oppo", "realme")
+        // Extra background-running advice for systems that stop apps aggressively.
+        val vendorTips = when (Build.MANUFACTURER.lowercase()) {
+            "oneplus", "oppo", "realme" -> R.string.oneplus_tips
+            "xiaomi", "redmi", "poco" -> R.string.miui_tips
+            else -> null
+        }
         setContent {
             var settings by remember { mutableStateOf(settingsStore.load()) }
             val state by StreamController.state.collectAsStateWithLifecycle()
@@ -99,7 +105,7 @@ class MainActivity : ComponentActivity() {
                             settingsStore.save(it)
                         },
                         batteryOk = batteryOk,
-                        onePlusFamily = onePlusFamily,
+                        vendorTips = vendorTips,
                         onRequestBatteryExemption = ::requestBatteryExemption,
                         onStart = ::startStreaming,
                         onStop = { StreamingService.stop(this) },
@@ -108,7 +114,7 @@ class MainActivity : ComponentActivity() {
                         phonePin = phonePin,
                         onCreateCloudAgent = { name ->
                             val credential = CloudAgentStore.get(this).create(name)
-                            val chinese = resources.configuration.locales[0].language == "zh"
+                            val chinese = ConfigurationCompat.getLocales(resources.configuration)[0]?.language == "zh"
                             CloudInstructions.text(settings.cloudRelay, credential, chinese)
                         },
                         onRevokeCloudAgent = { id -> CloudAgentStore.get(this).revoke(id) },

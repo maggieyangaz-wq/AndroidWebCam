@@ -16,7 +16,8 @@ Every change that affects the app ends in a published release, in exactly this o
    GitHub MCP tools (`actions_list`, `get_job_logs`, `list_releases`). If it fails, fix and push again.
 3. Test that commit in this environment: `EMULATOR_ACCEL=off tools/verify-release.sh`
    (no KVM here; drop the variable where KVM exists). It runs unit tests + lint, the browser
-   end-to-end test, the cloud relay tests (local Workers runtime) and, on an Android 11 (API 30) emulator, the functional end-to-end test and the
+   end-to-end test, the cloud relay tests (local Workers runtime) and, on an Android 11 (API 30) and
+   an Android 6.0 (API 23) emulator, the functional end-to-end test and the
    upgrade-install tests (in-place update keeps settings and TLS certificate; release build installs
    over the previous release; downgrade refused). `KEEP_EMULATOR=1` keeps the emulator for reruns.
 4. Only when it ends with `ALL CHECKS PASSED`: run the workflow "Publish tested release"
@@ -43,4 +44,7 @@ Test-only, tool and documentation changes do not create drafts (see the `paths` 
   "cloud AI access" turned on, while streaming, one TLS connection to the user's own relay
   (`relay/worker.js`); the phone authenticates with its Keystore key and pictures are end-to-end
   encrypted per cloud agent, so the relay never sees them. Live video never leaves the LAN.
-- Target device: OnePlus Nord N10 5G, Android 11 (API 30); minSdk 29.
+- Target device: OnePlus Nord N10 5G, Android 11 (API 30); also a Redmi 3S, Android 6.0.1 (API 23,
+  MIUI); minSdk 23. Android 6-9 have no TLS 1.3: there the app loads its bundled Conscrypt
+  (`TlsSupport`; 2.10.0 breaks Android 6, check before upgrading it). APKs need v1 signing for
+  Android 6. New AndroidX/Compose versions must still support minSdk 23.

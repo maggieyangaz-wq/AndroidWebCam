@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Android emulator tests for a release candidate (default: Android 11 / API 30, like the target phone):
+# Android emulator tests for a release candidate (default: Android 11 / API 30, like the target phone;
+# API_LEVEL=23: Android 6.0, the oldest supported version):
 #   1. functional end-to-end test (StreamingDeviceTest): service, camera, GL, H.264, MJPEG and the
 #      TLS 1.3 server with its Keystore key, used over the device's LAN address like a browser;
 #      cloud access (CloudDeviceTest): Keystore signature for the relay, protected agent keys;
@@ -9,7 +10,8 @@
 #      downgrades are refused (release builds signed with a throwaway key).
 #
 # Drives the device directly with adb / am instrument (robust on slow, software-emulated devices).
-# Reuses a running emulator; otherwise boots one, from the "awc_clean" snapshot when available.
+# Reuses a running emulator of that API level (one of another level is shut down first); otherwise
+# boots one, from the "awc_clean" snapshot when available.
 # Needs ANDROID_HOME (cmdline-tools) and the emulator's system libraries (libpulse0, libnss3, libx*).
 # Without KVM use EMULATOR_ACCEL=off (software emulation; boot and test timeouts are scaled up).
 # KEEP_EMULATOR=1 leaves an emulator started by this script running.
@@ -18,6 +20,7 @@ cd "$(dirname "$0")/.."
 
 API="${API_LEVEL:-30}"
 IMAGE="system-images;android-${API};default;x86_64"
+AVD="awc$([ "$API" = 30 ] || echo "$API")"
 SDK="${ANDROID_HOME:?ANDROID_HOME is not set}"
 BIN="$SDK/cmdline-tools/latest/bin"
 ADB="$SDK/platform-tools/adb"
@@ -43,6 +46,8 @@ else
   CORES=2
   MEMORY=3072
 fi
+# Android 6 images often hang at boot with more than 3 GB (memory above 4 GB).
+if [ "$API" -lt 26 ] && [ "$MEMORY" -gt 3072 ]; then MEMORY=3072; fi
 STARTED_EMULATOR=false
 
 log() { echo "== $*"; }
@@ -61,7 +66,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-device_ready() { [ "$("$ADB" shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ]; }
+device_ready() { [ "$(timeout 60 "$ADB" shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ]; }
+device_api() { "$ADB" shell getprop ro.build.version.sdk 2> /dev/null | tr -d '\r'; }
+
+# The emulator's LAN: its virtual Wi-Fi. Images before Android 7.1 (API 25) have no Wi-Fi; their only
+# network (eth0) is mobile data, which the app refuses. With mobile data off, eth0 keeps its address
+# and is no network of ConnectivityManager any more, so the app serves on it as on a LAN (Ethernet).
+wifi_lan() { [ "$(device_api)" -ge 25 ]; }
+
+# Process check (pidof prints every process on Android 6).
+app_running() { "$ADB" shell "ps -A 2> /dev/null; ps" | tr -d '\r' | awk '{print $NF}' | grep -qx "$1"; }
 
 # Waits up to $1 seconds for an IPv4 address on the emulator's Wi-Fi interface.
 wifi_ready() {
@@ -74,6 +88,15 @@ prepare_device() {
     "$ADB" shell settings put global "$s" 0
   done
   "$ADB" shell settings put global verifier_verify_adb_installs 0 > /dev/null 2>&1 || true
+  if ! wifi_lan; then
+    "$ADB" shell svc data disable > /dev/null 2>&1 || true
+    if ! timeout 120 bash -c "until '$ADB' shell ip -4 addr show eth0 2> /dev/null | grep -q 'inet ' && '$ADB' shell dumpsys connectivity 2> /dev/null | grep -q 'Active default network: none'; do sleep 2; done"; then
+      echo "The emulator's network did not become a LAN (eth0 without mobile data)."
+      exit 1
+    fi
+    finish_prepare
+    return
+  fi
   "$ADB" shell svc wifi enable > /dev/null 2>&1 || true
   # The app only serves on LAN interfaces (Wi-Fi), never on the emulated mobile network. After a
   # cold boot or a snapshot restore the emulator does not always rejoin its virtual Wi-Fi by itself.
@@ -85,6 +108,10 @@ prepare_device() {
       exit 1
     fi
   fi
+  finish_prepare
+}
+
+finish_prepare() {
   "$ADB" shell wm dismiss-keyguard > /dev/null 2>&1 || true
   "$ADB" shell input keyevent 82 > /dev/null 2>&1 || true
   for p in "$DEBUG_PKG" "$DEBUG_PKG.test" "$RELEASE_PKG"; do "$ADB" uninstall "$p" > /dev/null 2>&1 || true; done
@@ -93,18 +120,21 @@ prepare_device() {
 boot_emulator() {
   yes 2> /dev/null | "$BIN/sdkmanager" --licenses > /dev/null 2>&1 || true
   "$BIN/sdkmanager" --install "emulator" "platform-tools" "$IMAGE" > /dev/null
-  if ! "$SDK/emulator/emulator" -list-avds | grep -qx awc; then
-    echo no | "$BIN/avdmanager" create avd --force --name awc --package "$IMAGE" --device pixel_5 > /dev/null
+  if ! "$SDK/emulator/emulator" -list-avds | grep -qx "$AVD"; then
+    echo no | "$BIN/avdmanager" create avd --force --name "$AVD" --package "$IMAGE" --device pixel_5 > /dev/null
   fi
   local fresh=true
   local boot_args=(-no-snapshot-load -wipe-data)
-  if [ -d "$ANDROID_AVD_HOME/awc.avd/snapshots/$SNAPSHOT" ]; then
+  # Snapshots of Android 6 images do not restore reliably (the boot hangs): always cold boot those.
+  local use_snapshot=true
+  if [ "$API" -lt 26 ]; then use_snapshot=false; fi
+  if [ "$use_snapshot" = true ] && [ -d "$ANDROID_AVD_HOME/$AVD.avd/snapshots/$SNAPSHOT" ]; then
     fresh=false
     boot_args=(-snapshot "$SNAPSHOT")
   fi
   log "Starting emulator (accel=$ACCEL, $([ "$fresh" = true ] && echo "cold boot" || echo "snapshot $SNAPSHOT"))"
   "$ADB" start-server > /dev/null 2>&1
-  "$SDK/emulator/emulator" -avd awc -no-window -no-audio -no-boot-anim -no-metrics -no-snapshot-save "${boot_args[@]}" \
+  "$SDK/emulator/emulator" -avd "$AVD" -no-window -no-audio -no-boot-anim -no-metrics -no-snapshot-save "${boot_args[@]}" \
     -gpu swiftshader_indirect -camera-back emulated -camera-front none -memory "$MEMORY" -cores "$CORES" \
     -accel "$ACCEL" > "$LOG" 2>&1 &
   local pid=$!
@@ -128,7 +158,7 @@ boot_emulator() {
     fresh=true
   fi
   prepare_device
-  if [ "$fresh" = true ]; then
+  if [ "$fresh" = true ] && [ "$use_snapshot" = true ]; then
     log "Saving snapshot $SNAPSHOT for faster runs"
     "$ADB" emu avd snapshot save "$SNAPSHOT" > /dev/null 2>&1 || echo "warning: snapshot not saved"
   fi
@@ -163,6 +193,15 @@ fail() {
 }
 
 # ------------------------------------------------------------------------------ device
+if [ "$("$ADB" get-state 2> /dev/null || true)" = device ] && device_ready && [ "$(device_api)" != "$API" ]; then
+  if ! "$ADB" get-serialno | grep -q '^emulator-'; then
+    echo "The connected device runs API $(device_api), not $API."
+    exit 1
+  fi
+  log "Shutting down the running emulator (API $(device_api))"
+  "$ADB" emu kill > /dev/null 2>&1 || true
+  timeout 120 bash -c "while '$ADB' get-state > /dev/null 2>&1; do sleep 2; done" || true
+fi
 if [ "$("$ADB" get-state 2> /dev/null || true)" = device ] && device_ready; then
   log "Using the running emulator/device"
   prepare_device
@@ -208,7 +247,12 @@ keytool -genkeypair -storetype PKCS12 -keystore "$WORK/test.p12" -alias androidw
 export ANDROID_KEYSTORE_FILE="$WORK/test.p12" ANDROID_KEY_ALIAS=androidwebcam
 git fetch -q --tags origin 2> /dev/null || true
 previous=$(git describe --tags --abbrev=0 --match 'v*' 2> /dev/null || true)
-if [ -n "$previous" ]; then
+previous_min_sdk=$({ git show "$previous:app/build.gradle.kts" 2> /dev/null | grep -oE 'minSdk = [0-9]+' | grep -oE '[0-9]+'; } || true)
+if [ -n "$previous" ] && [ -n "$previous_min_sdk" ] && [ "$previous_min_sdk" -gt "$API" ]; then
+  echo "  previous release $previous does not support API $API (minSdk $previous_min_sdk): using the current code as the old version"
+  ./gradlew -q --console=plain :app:assembleRelease -PawcVersionCode=200 -PawcVersionName=previous
+  cp app/build/outputs/apk/release/app-release.apk "$WORK/release-200.apk"
+elif [ -n "$previous" ]; then
   echo "  previous release: $previous"
   git worktree add -q --detach "$WORK/prev" "$previous"
   (cd "$WORK/prev" && ./gradlew -q --console=plain :app:assembleRelease -PawcVersionCode=200 -PawcVersionName=previous)
@@ -230,10 +274,12 @@ install_apk -r "$WORK/release-201.apk" || fail "upgrade install over the previou
 [ "$(package_field "$RELEASE_PKG" versionCode)" = 201 ] || fail "versionCode after upgrade"
 [ "$(package_field "$RELEASE_PKG" firstInstallTime)" = "$first_installed" ] || fail "upgrade must not reinstall"
 "$ADB" logcat -b crash -c > /dev/null 2>&1 || true
+"$ADB" logcat -c > /dev/null 2>&1 || true
 "$ADB" shell am start -W -n "$RELEASE_PKG/.MainActivity" > /dev/null || fail "launch upgraded release"
 sleep $((5 * TIMEOUT_SCALE))
-[ -n "$("$ADB" shell pidof "$RELEASE_PKG" | tr -d '\r')" ] || fail "upgraded release is not running"
+app_running "$RELEASE_PKG" || fail "upgraded release is not running"
 if "$ADB" logcat -d -b crash 2> /dev/null | grep -q "$RELEASE_PKG"; then fail "upgraded release crashed"; fi
+if "$ADB" logcat -d -s AndroidRuntime:E 2> /dev/null | grep -q "Process: $RELEASE_PKG"; then fail "upgraded release crashed"; fi
 if install_apk -r "$WORK/release-200.apk"; then fail "downgrade must be refused"; fi
 echo "  downgrade refused as expected"
 "$ADB" uninstall "$RELEASE_PKG" > /dev/null 2>&1 || true

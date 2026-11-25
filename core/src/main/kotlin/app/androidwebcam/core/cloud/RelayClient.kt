@@ -3,6 +3,7 @@ package app.androidwebcam.core.cloud
 import app.androidwebcam.core.Json
 import app.androidwebcam.core.Logger
 import app.androidwebcam.core.http.WebSocket
+import app.androidwebcam.core.tls.Tls
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -19,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
+import javax.net.ssl.X509TrustManager
 
 /**
  * The phone's single outgoing connection, to the user's own cloud relay (only while streaming and
@@ -69,19 +71,26 @@ class RelayClient(
 
         companion object {
             /**
-             * TLS with the system's trusted certificates and hostname check (the only mode the app
-             * uses). [connectRaw] opens the TCP connection (e.g. over a chosen network).
+             * TLS with certificate and hostname checks (the only mode the app uses): the system's
+             * trusted certificates, or those of [trust] (old Android versions, see [Tls.trustManager]),
+             * with [Tls.provider] as the TLS implementation when set. [connectRaw] opens the TCP
+             * connection (e.g. over a chosen network).
              */
             fun tls(
                 connectRaw: (String, Int, Int) -> Socket = { host, port, timeoutMs -> Socket().apply { connect(InetSocketAddress(host, port), timeoutMs) } },
+                trust: (() -> X509TrustManager)? = null,
             ): Connector = Connector { host, port, timeoutMs ->
                 val raw = connectRaw(host, port, timeoutMs)
                 try {
-                    val ssl = SSLContext.getDefault().socketFactory.createSocket(raw, host, port, true) as SSLSocket
-                    ssl.sslParameters = ssl.sslParameters.apply {
-                        serverNames = listOf(SNIHostName(host))
-                        endpointIdentificationAlgorithm = "HTTPS"
+                    val context = if (trust == null && Tls.provider == null) {
+                        SSLContext.getDefault()
+                    } else {
+                        Tls.context("TLS").apply { init(null, trust?.let { arrayOf(it()) }, null) }
                     }
+                    val ssl = context.socketFactory.createSocket(raw, host, port, true) as SSLSocket
+                    // The bundled Conscrypt (Android 6-9) sends the server name given to createSocket;
+                    // the platform parameters below do not exist before Android 7.
+                    if (Tls.provider == null) requestNameChecks(ssl, host)
                     ssl.soTimeout = timeoutMs
                     ssl.startHandshake()
                     // Checked here as well (the same on every platform), not only via the parameters above.
@@ -94,6 +103,15 @@ class RelayClient(
                 } catch (e: Exception) {
                     try { raw.close() } catch (_: Exception) {}
                     throw e
+                }
+            }
+
+            /** SNI and the TLS stack's own hostname check (Android 7+ and Java; see [tls]). */
+            @Suppress("NewApi")
+            private fun requestNameChecks(ssl: SSLSocket, host: String) {
+                ssl.sslParameters = ssl.sslParameters.apply {
+                    serverNames = listOf(SNIHostName(host))
+                    endpointIdentificationAlgorithm = "HTTPS"
                 }
             }
 

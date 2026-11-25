@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.HardwareBuffer
 import android.media.ImageReader
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.view.Surface
@@ -27,10 +28,14 @@ class MjpegEncoder(
 ) {
     private val thread = HandlerThread("awc-mjpeg").apply { start() }
     private val handler = Handler(thread.looper)
-    private val reader: ImageReader = ImageReader.newInstance(
-        width, height, PixelFormat.RGBA_8888, 3,
-        HardwareBuffer.USAGE_CPU_READ_OFTEN or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT,
-    )
+    private val reader: ImageReader = if (Build.VERSION.SDK_INT >= 29) {
+        ImageReader.newInstance(
+            width, height, PixelFormat.RGBA_8888, 3,
+            HardwareBuffer.USAGE_CPU_READ_OFTEN or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT,
+        )
+    } else {
+        ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
+    }
     private val bitmap: Bitmap = createBitmap(width, height)
     private val row = ByteArray(width * 4)
     private var packed: ByteBuffer? = null

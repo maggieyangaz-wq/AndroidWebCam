@@ -79,7 +79,7 @@ fun MainScreen(
     cameras: List<BackCamera>,
     onSettingsChange: (StreamSettings) -> Unit,
     batteryOk: Boolean,
-    onePlusFamily: Boolean,
+    vendorTips: Int?,
     onRequestBatteryExemption: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -126,7 +126,7 @@ fun MainScreen(
                 ViewersCard(state)
                 ControlsCard(state)
             }
-            KeepAliveCard(settings, onSettingsChange, batteryOk, onePlusFamily, onRequestBatteryExemption)
+            KeepAliveCard(settings, onSettingsChange, batteryOk, vendorTips, onRequestBatteryExemption)
             SettingsCard(settings, cameras, enabled = !active, onSettingsChange)
             CloudCard(
                 settings, editable = !active, state, cloudAgents, phonePin ?: state.phonePin,
@@ -376,7 +376,7 @@ private fun KeepAliveCard(
     settings: StreamSettings,
     onChange: (StreamSettings) -> Unit,
     batteryOk: Boolean,
-    onePlusFamily: Boolean,
+    vendorTips: Int?,
     onRequestBatteryExemption: () -> Unit,
 ) {
     InfoCard(stringResource(R.string.section_keep_alive)) {
@@ -390,9 +390,9 @@ private fun KeepAliveCard(
             Text(stringResource(R.string.battery_text), style = MaterialTheme.typography.bodyMedium)
             TextButton(onClick = onRequestBatteryExemption) { Text(stringResource(R.string.battery_button)) }
         }
-        if (onePlusFamily) {
+        if (vendorTips != null) {
             HorizontalDivider()
-            Text(stringResource(R.string.oneplus_tips), style = MaterialTheme.typography.bodyMedium)
+            Text(stringResource(vendorTips), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
