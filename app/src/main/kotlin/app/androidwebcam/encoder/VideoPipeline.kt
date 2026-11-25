@@ -51,7 +51,7 @@ class VideoPipeline(
         rotation = Orientation.normalize(initialRotation)
         val cameraSurface = gl.start(capture.width, capture.height, natural)
         gl.streamRotation = rotation
-        gl.runSync { createEncoder() }
+        gl.runSync(GlRenderer.SETUP_TIMEOUT_MS) { createEncoder() }
         cameraSource = CameraSource(context, camera, BackCameras.chooseFpsRange(chars, settings.fps), logger, object : CameraSource.Listener {
             override fun onCameraRunning() = listener.onCameraRunning()
             override fun onCameraProblem(reason: String, recoverable: Boolean) = listener.onCameraProblem(reason, recoverable)

@@ -21,6 +21,7 @@ import app.androidwebcam.service.Phase
 import app.androidwebcam.service.StreamController
 import app.androidwebcam.service.StreamingService
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -60,6 +61,12 @@ class CloudDeviceTest {
     private val scale = InstrumentationRegistry.getArguments().getString("timeoutScale")?.toDoubleOrNull()?.coerceAtLeast(1.0) ?: 1.0
 
     private fun t(ms: Long): Long = (ms * scale).toLong()
+
+    /** An error left by an earlier, failed test must not fail this one before it has started. */
+    @Before
+    fun clearEarlierError() {
+        StreamController.clearError()
+    }
 
     @After
     fun tearDown() {

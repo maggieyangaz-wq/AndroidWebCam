@@ -52,7 +52,12 @@ class GlRenderer(private val logger: Logger) {
     /** Encoding is skipped while nobody watches the H.264 stream (saves power). */
     @Volatile var encoderEnabled = false
 
-    fun <T> runSync(block: () -> T): T {
+    /**
+     * Runs [block] on the GL thread and waits for it. [timeoutMs] only guards against a stuck GL
+     * thread; one-time setup (GL context, encoder start) gets [SETUP_TIMEOUT_MS], because it can take
+     * several seconds on old or very slow devices, e.g. just after the phone has started.
+     */
+    fun <T> runSync(timeoutMs: Long = TIMEOUT_MS, block: () -> T): T {
         if (Looper.myLooper() == handler.looper) return block()
         val latch = CountDownLatch(1)
         var result: Result<T>? = null
@@ -60,12 +65,12 @@ class GlRenderer(private val logger: Logger) {
             result = runCatching(block)
             latch.countDown()
         }
-        check(latch.await(5, TimeUnit.SECONDS)) { "GL thread did not respond" }
+        check(latch.await(timeoutMs, TimeUnit.MILLISECONDS)) { "GL thread did not respond" }
         return result!!.getOrThrow()
     }
 
-    /** Creates the GL context and the camera input surface. */
-    fun start(bufferWidth: Int, bufferHeight: Int, naturalSize: Orientation.Size): Surface = runSync {
+    /** Creates the GL context and the camera input surface. Not on the main thread (may take a while). */
+    fun start(bufferWidth: Int, bufferHeight: Int, naturalSize: Orientation.Size): Surface = runSync(SETUP_TIMEOUT_MS) {
         val core = EglCore()
         egl = core
         offscreen = core.createOffscreenSurface()
@@ -196,5 +201,10 @@ class GlRenderer(private val logger: Logger) {
         } finally {
             thread.quitSafely()
         }
+    }
+
+    companion object {
+        const val TIMEOUT_MS = 5_000L
+        const val SETUP_TIMEOUT_MS = 30_000L
     }
 }
