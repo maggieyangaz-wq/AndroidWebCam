@@ -28,6 +28,7 @@ import app.androidwebcam.security.CloudAgentStore
 import app.androidwebcam.security.PhoneRelayIdentity
 import app.androidwebcam.security.TlsIdentityStore
 import java.net.BindException
+import java.net.InetAddress
 import java.util.concurrent.Executors
 
 /**
@@ -58,6 +59,8 @@ class StreamSession(
     @Volatile private var pipeline: VideoPipeline? = null
     private var orientationListener: OrientationEventListener? = null
     @Volatile private var stopped = false
+    /** LAN addresses viewers could reach this phone at (see [onEndpointsChanged]). */
+    private var servedAddresses: Set<InetAddress> = emptySet()
     private val cloudAgents = CloudAgentStore.get(context)
     @Volatile private var relay: RelayClient? = null
     // Created or revoked cloud agents: tell the relay at once (off the caller's thread: network I/O).
@@ -276,6 +279,13 @@ class StreamSession(
 
     private fun onEndpointsChanged(endpoints: List<LanNetworkMonitor.Endpoint>) {
         if (stopped) return
+        val addresses = endpoints.map { it.address }.toSet<InetAddress>()
+        val lost = synchronized(this) {
+            val gone = servedAddresses.any { it !in addresses }
+            servedAddresses = addresses
+            gone
+        }
+        if (lost) main.post { onNetworkLost() }
         StreamController.update { it.copy(endpoints = endpoints) }
         main.post { if (!stopped) host.onViewerCountChanged(server?.currentViewers()?.size ?: 0, primaryUrl()) }
         val km = keyManager ?: return
@@ -290,6 +300,24 @@ class StreamSession(
         } catch (_: java.util.concurrent.RejectedExecutionException) {
             // session is shutting down
         }
+    }
+
+    /**
+     * The phone left a network viewers watched it on (Wi-Fi lost, other network or address): its
+     * viewers are cut off. End every session and change the access code and QR link at once, so
+     * nobody silently resumes with the old code: viewers show "signal lost" and need the new code.
+     * (AI access keys and cloud agents stay: they are revoked separately.)
+     */
+    private fun onNetworkLost() {
+        if (stopped) return
+        val ac = access ?: return
+        ac.revokeAll()
+        server?.disconnectAllViewers()
+        val text = context.getString(R.string.alert_network_lost)
+        StreamController.update {
+            it.copy(accessCode = ac.displayCode, pairingToken = ac.issuePairingToken(), alerts = (listOf(text) + it.alerts).take(5))
+        }
+        schedulePairingRefresh()
     }
 
     private fun primaryUrl(): String? {

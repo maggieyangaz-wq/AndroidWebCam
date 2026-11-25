@@ -18,6 +18,9 @@ const AUTH_TIMEOUT_MS = 15000;
 const MAX_PENDING = 4;
 const MIN_INTERVAL_MS = 2000; // per agent; the phone enforces its own (stricter) limits as well
 const MAX_AGENTS = 32;
+// The phone pings every 30 s. A phone that lost its network may never close its connection: after
+// two missed pings it counts as offline (agents get "phone offline" at once, not a timeout).
+const PHONE_SILENT_MS = 75000;
 
 const HEADERS = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" };
 
@@ -164,7 +167,7 @@ export class PhoneHub extends DurableObject {
     const match = /^Bearer awcc_([A-Za-z0-9_-]{8})_([A-Za-z0-9_-]{43})$/.exec(auth);
     if (!match) return json(401, { error: "unauthorized" });
     const [, agentId, secret] = match;
-    const phone = this.ctx.getWebSockets().find((w) => w.deserializeAttachment()?.stage === "ready");
+    const phone = this.livePhone();
     if (!phone) {
       return json(503, { error: "phone offline", hint: "Streaming must be running on the phone with cloud access turned on." }, { "Retry-After": "30" });
     }
@@ -189,6 +192,25 @@ export class PhoneHub extends DurableObject {
       this.settle(id, json(503, { error: "phone offline" }));
     }
     return result;
+  }
+
+  /** The authenticated phone connection; one that went silent is dropped. */
+  livePhone() {
+    const now = Date.now();
+    for (const ws of this.ctx.getWebSockets()) {
+      const state = ws.deserializeAttachment();
+      if (state?.stage !== "ready") continue;
+      const pinged = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() || 0;
+      if (now - Math.max(state.since || 0, pinged) <= PHONE_SILENT_MS) return ws;
+      try {
+        ws.serializeAttachment({ stage: "gone" });
+        ws.close(4408, "silent");
+      } catch {
+        // already closed
+      }
+      for (const id of [...this.pending.keys()]) this.settle(id, json(503, { error: "phone offline" }));
+    }
+    return null;
   }
 
   settle(id, response) {

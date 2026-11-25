@@ -386,7 +386,16 @@ class WebCamServer(
                     when (frame.opcode) {
                         WebSocket.OP_TEXT -> when (Json.stringField(String(frame.payload, Charsets.UTF_8), "type", 32)) {
                             "keyframe" -> subscription.resync()
-                            else -> Unit // "ping" and unknown messages only prove liveness
+                            // Answered even while no pictures flow (e.g. the camera is busy): a viewer that
+                            // gets no answer knows at once that the phone is gone and stops showing the
+                            // last picture as if it were live.
+                            "ping" -> synchronized(writeLock) {
+                                watchdog.guard(socket) {
+                                    WebSocket.writeFrame(out, WebSocket.OP_TEXT, PONG)
+                                    out.flush()
+                                }
+                            }
+                            else -> Unit // unknown messages only prove liveness
                         }
                         WebSocket.OP_PING -> synchronized(writeLock) {
                             WebSocket.writeFrame(out, WebSocket.OP_PONG, frame.payload)
@@ -654,6 +663,7 @@ class WebCamServer(
         const val AI_BRIDGE = "awc-ai.mjs"
         private const val BOUNDARY = "awcframe"
         private val CRLF = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte())
+        private val PONG = "{\"type\":\"pong\"}".toByteArray(Charsets.UTF_8)
         const val HANDSHAKE_TIMEOUT_MS = 10_000
         const val REQUEST_TIMEOUT_MS = 10_000
         const val KEEP_ALIVE_TIMEOUT_MS = 15_000

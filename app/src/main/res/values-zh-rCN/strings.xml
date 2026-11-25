@@ -13,7 +13,7 @@
     <string name="connect_steps">1. 让另一台设备连接同一个 Wi-Fi（或连接本机热点）。\n2. 用浏览器（Chrome、Edge、Safari 或 Firefox）打开下面的地址。\n3. 第一次打开时浏览器会提示证书不受信任（自签名证书）：核对下面的证书指纹一致后选择继续访问。\n4. 输入访问码，或用另一台设备扫描二维码。</string>
     <string name="connect_no_network">没有找到 Wi-Fi 或热点地址。请连接 Wi-Fi 或打开热点；不会使用移动数据。</string>
     <string name="label_access_code">访问码</string>
-    <string name="access_code_hint">每次开始推流都会生成新的访问码。</string>
+    <string name="access_code_hint">每次开始推流、或手机断开网络后，都会更换访问码。</string>
     <string name="label_qr">扫码连接（一次性链接，5 分钟内有效）</string>
     <string name="action_copy">复制地址</string>
     <string name="copied">地址已复制</string>
@@ -73,6 +73,7 @@
     <string name="alert_viewer_qr">新的观看者（扫码）：%1$s（%2$s）</string>
     <string name="alert_locked">%1$s 多次输错访问码，已封禁 %2$d 秒</string>
     <string name="alert_rotated">错误次数过多，访问码已自动更换</string>
+    <string name="alert_network_lost">手机网络已断开：观看者已断开，访问码已更换</string>
     <string name="kind_wifi">Wi-Fi</string>
     <string name="kind_hotspot">热点</string>
     <string name="kind_usb">USB 网络共享</string>

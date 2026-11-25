@@ -178,6 +178,54 @@ class ServerIntegrationTest {
     }
 
     @Test
+    fun answersViewerPingsEvenWithoutPictures() {
+        // No decoder config and no frames (e.g. the camera is busy): the phone still answers each
+        // ping, so the viewer can tell "no picture right now" from "the phone is gone".
+        val cookie = connect().use { login(it) }
+        connect().use { c ->
+            c.send(
+                "GET /ws HTTP/1.1\r\nHost: $host\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+                    "Origin: https://$host\r\nCookie: $cookie\r\n\r\n",
+            )
+            assertEquals(101, c.readResponse(readBody = false).status)
+            repeat(2) {
+                WebSocket.writeMaskedFrame(c.output, WebSocket.OP_TEXT, "{\"type\":\"ping\"}".toByteArray(), java.security.SecureRandom())
+                c.output.flush()
+                val pong = readServerFrame(c)
+                assertEquals(WebSocket.OP_TEXT, pong.first)
+                assertEquals("{\"type\":\"pong\"}", String(pong.second))
+            }
+        }
+    }
+
+    @Test
+    fun revokedSessionsEndTheStreamAndTheOldCode() {
+        // What the phone does when it loses its network: viewers are told the session ended, and
+        // neither the old session nor the old code work afterwards.
+        val oldCode = access.displayCode
+        val cookie = connect().use { login(it) }
+        connect().use { c ->
+            c.send(
+                "GET /ws HTTP/1.1\r\nHost: $host\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+                    "Origin: https://$host\r\nCookie: $cookie\r\n\r\n",
+            )
+            assertEquals(101, c.readResponse(readBody = false).status)
+            access.revokeAll()
+            val close = readServerFrame(c)
+            assertEquals(WebSocket.OP_CLOSE, close.first)
+            assertEquals(4401, ((close.second[0].toInt() and 0xFF) shl 8) or (close.second[1].toInt() and 0xFF))
+        }
+        assertTrue(access.displayCode != oldCode)
+        connect().use { c ->
+            assertEquals(401, c.request("GET", "/api/status", host, mapOf("Cookie" to cookie)).status)
+            val (headers, _) = json("")
+            assertEquals(401, c.request("POST", "/api/login", host, headers, "{\"code\":\"$oldCode\"}").status)
+        }
+    }
+
+    @Test
     fun webSocketRequiresSameOrigin() {
         val cookie = connect().use { login(it) }
         connect().use { c ->

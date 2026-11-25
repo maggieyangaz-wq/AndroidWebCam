@@ -48,6 +48,39 @@ async function waitForPicture(page) {
   return handle.jsonValue();
 }
 
+/** True when no picture is left on the canvas (it is cleared when the signal is lost). */
+async function canvasBlank(page) {
+  return page.evaluate(() => {
+    const canvas = document.getElementById('canvas');
+    if (!canvas.width || !canvas.height) return true;
+    const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    for (let i = 0; i < d.length; i += 4000) if (d[i] + d[i + 1] + d[i + 2] > 0) return false;
+    return true;
+  });
+}
+
+/**
+ * Lets a test silence the phone the way a lost Wi-Fi does: the connection stays open but nothing
+ * arrives any more (window.__awcDrop = 'all'), or only the pictures stop ('binary').
+ */
+function silenceHook() {
+  window.__awcDrop = '';
+  const Native = window.WebSocket;
+  window.WebSocket = class extends Native {
+    set onmessage(handler) {
+      super.onmessage = (event) => {
+        const drop = window.__awcDrop;
+        if (drop === 'all' || (drop === 'binary' && typeof event.data !== 'string')) return;
+        handler(event);
+      };
+    }
+
+    get onmessage() {
+      return super.onmessage;
+    }
+  };
+}
+
 (async () => {
   const browser = await chromium.launch();
   try {
@@ -176,6 +209,85 @@ async function waitForPicture(page) {
       await page.click('#ai-close');
       check('AI panel closes', await page.isHidden('#ai-panel'));
       check('no CSP violations in the AI panel', problems.length === 0, problems.join(' | '));
+      await context.close();
+    }
+
+    // 6) The phone vanishes (e.g. it lost its Wi-Fi: its connections stay silently open). The viewer
+    //    must not keep showing the last picture: within seconds it says that the signal is lost and
+    //    asks to reconnect. If only this device's connection dropped and the phone kept the session,
+    //    the picture comes back by itself; once the phone has ended the session (it does when it
+    //    loses its network), the viewer waits for the new code.
+    {
+      const { context, page, problems } = await newPage(browser, { locale: 'zh-CN' });
+      await context.addInitScript(silenceHook);
+      await loginWithCode(page, info.code);
+      check('signal test: live H.264 picture', (await waitForPicture(page)) === 'h264');
+      await page.waitForTimeout(3000);
+      check('connected phone keeps the viewer live (answers pings)', await page.isVisible('#viewer'));
+
+      await page.route('**/api/status', (route) => route.abort());
+      await page.evaluate(() => { window.__awcDrop = 'all'; });
+      let since = Date.now();
+      await page.waitForSelector('#login:not([hidden])', { timeout: 20000 });
+      let message = await page.textContent('#login-error');
+      check('phone gone: "signal lost, reconnect" within seconds instead of the last picture',
+        /信号已断开.*需要重新连接/.test(message) && Date.now() - since < 12000, `${Date.now() - since} ms: ${message}`);
+      check('phone gone: the last picture is removed', (await page.isHidden('#viewer')) && (await canvasBlank(page)));
+      await page.screenshot({ path: `${outDir}/viewer-signal-lost.png` });
+
+      await page.unroute('**/api/status');
+      await page.evaluate(() => { window.__awcDrop = ''; });
+      await page.waitForSelector('#viewer:not([hidden])', { timeout: 15000 });
+      check('session kept by the phone: the picture comes back by itself', (await waitForPicture(page)) === 'h264');
+
+      await page.route('**/api/status', (route) => route.abort());
+      await page.evaluate(() => { window.__awcDrop = 'all'; });
+      await page.waitForSelector('#login:not([hidden])', { timeout: 20000 });
+      // The phone ends every session when it loses its network (here: this viewer's session).
+      await page.evaluate(() => fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }));
+      await page.unroute('**/api/status');
+      await page.evaluate(() => { window.__awcDrop = ''; });
+      await page.waitForTimeout(8000);
+      message = await page.textContent('#login-error');
+      check('session ended by the phone: stays on "signal lost" until the new code is entered',
+        (await page.isHidden('#viewer')) && /信号已断开/.test(message), message);
+      await page.fill('#code', info.code);
+      await page.click('#btn-connect');
+      await page.waitForSelector('#viewer:not([hidden])', { timeout: 10000 });
+      check('reconnects with the code', (await waitForPicture(page)) === 'h264');
+
+      // The phone answers but sends no pictures (e.g. another app took the camera): no frozen
+      // picture either, a notice instead; the picture returns when the phone sends pictures again.
+      await page.evaluate(() => { window.__awcDrop = 'binary'; });
+      since = Date.now();
+      await page.waitForFunction(() => !document.getElementById('overlay').hidden, null, { timeout: 10000 });
+      const notice = await page.textContent('#status-text');
+      check('no pictures: notice instead of a frozen picture', /暂时没有画面/.test(notice) && (await canvasBlank(page)),
+        `${Date.now() - since} ms: ${notice}`);
+      await page.waitForTimeout(8000);
+      check('no pictures but the phone answers: not "signal lost"', await page.isVisible('#viewer'));
+      await page.evaluate(() => { window.__awcDrop = ''; });
+      await page.waitForFunction(() => document.getElementById('overlay').hidden, null, { timeout: 15000 });
+      check('pictures again: notice gone', (await waitForPicture(page)) === 'h264');
+      check('no CSP violations or script errors (signal)', problems.length === 0, problems.join(' | '));
+      await context.close();
+    }
+
+    // 7) The same in compatibility mode (MJPEG): the status requests show that the phone is gone.
+    {
+      const { context, page, problems } = await newPage(browser, { locale: 'en-US' });
+      await context.addInitScript(() => { delete window.VideoDecoder; delete window.EncodedVideoChunk; });
+      await loginWithCode(page, info.code);
+      check('signal test: MJPEG picture', (await waitForPicture(page)) === 'mjpeg');
+      await page.waitForTimeout(3000);
+      await page.route('**/api/status', (route) => route.abort());
+      const since = Date.now();
+      await page.waitForSelector('#login:not([hidden])', { timeout: 20000 });
+      const message = await page.textContent('#login-error');
+      check('MJPEG: phone gone shows "signal lost" within seconds', /Signal lost/.test(message) && Date.now() - since < 12000,
+        `${Date.now() - since} ms: ${message}`);
+      check('MJPEG: the last picture is removed', !(await page.getAttribute('#mjpeg', 'src')));
+      check('no CSP violations or script errors (MJPEG signal)', problems.length === 0, problems.join(' | '));
       await context.close();
     }
   } finally {

@@ -275,9 +275,85 @@ class StreamingDeviceTest {
         }
     }
 
+    /**
+     * The phone loses its Wi-Fi while a viewer is logged in: every session ends and the access code
+     * changes at once, so neither the old session nor the old code work when the phone is back
+     * (the viewer page shows "signal lost" and asks for the new code).
+     */
+    @Test
+    fun losingTheNetworkEndsSessionsAndChangesTheCode() {
+        SettingsStore(context).save(StreamSettings(quality = Quality.P720, fps = 15, orientation = 0, port = 8443))
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val main = launchMainActivity(t(60_000))
+        try {
+            instrumentation.runOnMainSync { StreamingService.start(main) }
+            val state = waitFor(t(90_000)) {
+                StreamController.state.value.takeIf { it.phase == Phase.RUNNING && it.endpoints.isNotEmpty() && it.streamWidth > 0 }
+            }
+            val oldCode = state.accessCode!!
+            val oldHost = state.endpoints.first().address.hostAddress!!
+            val oldAuthority = "$oldHost:${state.port}"
+            val cookie = connect(pinnedContext(state.fingerprint!!), oldHost, state.port).use { c ->
+                val r = c.request("POST", "/api/login", oldAuthority, json(oldAuthority), "{\"code\":\"$oldCode\"}")
+                assertEquals(204, r.status)
+                val cookie = r.header("set-cookie")!!.substringBefore(';')
+                assertEquals(200, c.request("GET", "/api/status", oldAuthority, mapOf("Cookie" to cookie)).status)
+                cookie
+            }
+
+            try {
+                shell("svc wifi disable")
+                val lost = waitFor(t(60_000)) { StreamController.state.value.takeIf { it.accessCode != oldCode } }
+                assertEquals(context.getString(R.string.alert_network_lost), lost.alerts.firstOrNull())
+                log("network lost: new code, endpoints=${lost.endpoints}")
+            } finally {
+                restoreWifi()
+            }
+
+            val back = waitFor(t(60_000)) {
+                StreamController.state.value.takeIf { it.phase == Phase.RUNNING && it.endpoints.isNotEmpty() }
+            }
+            assertTrue("the old code must not come back", back.accessCode != oldCode)
+            val host = back.endpoints.first().address.hostAddress!!
+            val authority = "$host:${back.port}"
+            connect(pinnedContext(back.fingerprint!!), host, back.port).use { c ->
+                val status = c.request("GET", "/api/status", authority, mapOf("Cookie" to cookie))
+                assertEquals("the old session must have ended", 401, status.status)
+                assertEquals("the old code must be refused", 401, c.request("POST", "/api/login", authority, json(authority), "{\"code\":\"$oldCode\"}").status)
+                assertEquals("the new code works", 204, c.request("POST", "/api/login", authority, json(authority), "{\"code\":\"${back.accessCode}\"}").status)
+            }
+            log("network back at $host: old session and code refused, new code accepted")
+        } finally {
+            instrumentation.runOnMainSync { main.finish() }
+        }
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private fun log(message: String) = println("AWC-TEST $message")
+
+    /** Runs a command as the shell user (like adb shell) and returns its output. */
+    private fun shell(command: String): String {
+        val output = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+        return android.os.ParcelFileDescriptor.AutoCloseInputStream(output).use { String(it.readBytes()) }
+    }
+
+    /** Turns Wi-Fi back on; the emulator does not always rejoin its virtual network by itself. */
+    private fun restoreWifi() {
+        shell("svc wifi enable")
+        val deadline = SystemClock.uptimeMillis() + t(60_000)
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (shell("ip -4 addr show wlan0").contains("inet ")) return
+            Thread.sleep(1_000)
+        }
+        log("joining the emulator's Wi-Fi again")
+        shell("cmd wifi connect-network AndroidWifi open")
+        val retryDeadline = SystemClock.uptimeMillis() + t(120_000)
+        while (SystemClock.uptimeMillis() < retryDeadline) {
+            if (shell("ip -4 addr show wlan0").contains("inet ")) return
+            Thread.sleep(1_000)
+        }
+    }
 
     private fun windowFlags(activity: android.app.Activity): Int {
         var flags = 0

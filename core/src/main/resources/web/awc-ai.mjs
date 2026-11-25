@@ -218,7 +218,7 @@ async function login(target, pin, code) {
     if (session.code === code) session.code = null;
     throw new BridgeError('need-code', `The access code ${code.slice(0, 4)}-${code.slice(4)} is not valid` +
       (info.attemptsLeft !== undefined ? ` (${info.attemptsLeft} attempt(s) left before a temporary lock)` : '') +
-      '. The phone shows a new code each time streaming starts and after "disconnect all". ' +
+      '. The phone shows a new code each time streaming starts, after "disconnect all" and after it loses its network. ' +
       'Ask the user for the access code currently shown in the Android WebCam app and call the tool again with access_code.');
   }
   if (r.status === 429) {

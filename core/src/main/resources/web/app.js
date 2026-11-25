@@ -17,6 +17,8 @@
       connecting: 'Connecting…',
       waiting: 'Waiting for video…',
       reconnecting: 'Connection lost. Reconnecting…',
+      signalLost: 'Signal lost: the phone is disconnected. Make sure the phone is streaming, then reconnect with the new access code shown on the phone.',
+      noPicture: 'No picture from the phone right now (the camera may be in use by another app). Waiting…',
       sessionEnded: 'Session ended. Enter the current access code again.',
       pairingFailed: 'This QR link was already used or has expired. Enter the access code instead.',
       compat: 'This browser cannot decode H.264 here, switched to compatibility mode (MJPEG).',
@@ -66,6 +68,8 @@
       connecting: '正在连接…',
       waiting: '正在等待画面…',
       reconnecting: '连接中断，正在重连…',
+      signalLost: '信号已断开，需要重新连接。请确认手机正在推流，然后输入手机上显示的新访问码。',
+      noPicture: '手机暂时没有画面（摄像头可能被其他应用占用），正在等待…',
       sessionEnded: '会话已结束，请重新输入当前访问码。',
       pairingFailed: '此二维码链接已使用或已过期，请改为输入访问码。',
       compat: '此浏览器无法在这里解码 H.264，已切换为兼容模式（MJPEG）。',
@@ -122,6 +126,24 @@
   let wakeLock = null;
   let ctx = null;
 
+  // Liveness. The phone answers every ping (H.264) or status request (MJPEG); without an answer for
+  // SIGNAL_TIMEOUT_MS it is gone (Wi-Fi lost, streaming stopped, app ended): a phone that vanishes from
+  // the network does not close its connections, so waiting for the browser to notice would leave the
+  // last picture on screen as if it were live. The viewer says so instead, and asks for the new code.
+  const PING_INTERVAL_MS = 2000;
+  const SIGNAL_TIMEOUT_MS = 6000;
+  const PICTURE_STALL_MS = 3000;
+  const REQUEST_TIMEOUT_MS = 4000;
+  const PROBE_INTERVAL_MS = 3000;
+  let lastHeard = 0; // last answer from the phone
+  let lastPicture = 0; // last decoded H.264 picture (0: none yet on this connection)
+  let lastStatusCheck = 0;
+  let statusInFlight = false;
+  let lastTick = 0;
+  let probeTimer = null;
+  let probing = false;
+  let viewerGeneration = 0;
+
   function applyI18n() {
     document.documentElement.lang = zh ? 'zh-CN' : 'en';
     document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
@@ -152,6 +174,7 @@
 
   function showLogin(message) {
     stopStreaming();
+    stopProbe();
     $('ai-panel').hidden = true;
     $('viewer').hidden = true;
     $('login').hidden = false;
@@ -205,10 +228,14 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('ai-panel').hidden = true; });
     $('stage').addEventListener('dblclick', toggleFullscreen);
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && !stopped) requestWakeLock();
+      if (document.visibilityState !== 'visible') return;
+      // Background tabs may be frozen: give the connection a moment before judging it.
+      resetLiveness();
+      if (!stopped) requestWakeLock();
     });
     window.addEventListener('pagehide', () => stopStreaming());
     setInterval(updateStats, 1000);
+    setInterval(watchdog, 1000);
 
     // A one-time pairing token may arrive in the URL fragment (from the QR code).
     // Fragments are never sent to the server; remove it from the address bar right away.
@@ -221,7 +248,7 @@
         if (r.status === 204) { startViewer(); return; }
         if (r.status !== 401) { await handleLoginResponse(r); showLogin($('login-error').textContent); return; }
       }
-      const status = await fetch('/api/status', { cache: 'no-store', credentials: 'same-origin' });
+      const status = await fetchStatus();
       if (status.ok) startViewer();
       else showLogin(pairToken ? t('pairingFailed') : '');
     } catch (e) {
@@ -235,10 +262,15 @@
   }
 
   function startViewer() {
+    stopProbe();
+    viewerGeneration++; // retries scheduled for an earlier viewer are dropped
     $('login').hidden = true;
     $('viewer').hidden = false;
     stopped = false;
     retry = 0;
+    lastHeard = Date.now();
+    lastPicture = 0;
+    clearPicture();
     setStatus(t('connecting'));
     requestWakeLock();
     if (typeof window.VideoDecoder === 'function' && typeof window.EncodedVideoChunk === 'function') {
@@ -251,11 +283,120 @@
   function stopStreaming() {
     stopped = true;
     if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-    if (ws) { try { ws.close(1000); } catch (e) { /* ignore */ } ws = null; }
+    closeSocket();
     closeDecoder();
+    clearPicture();
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  }
+
+  /** Closes the current WebSocket on purpose (its close event is then ignored). */
+  function closeSocket() {
+    const socket = ws;
+    ws = null;
+    if (socket) { try { socket.close(1000); } catch (e) { /* ignore */ } }
+  }
+
+  /** Removes the last picture, so it is never shown as if it were live. */
+  function clearPicture() {
+    const canvas = $('canvas');
+    if (ctx && canvas.width && canvas.height) {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
     const img = $('mjpeg');
     if (img && img.getAttribute('src')) img.removeAttribute('src');
-    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  }
+
+  // ------------------------------------------------------------- signal (liveness)
+
+  /** GET /api/status, given up after REQUEST_TIMEOUT_MS: a phone that left the network never answers. */
+  async function fetchStatus() {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      return await fetch('/api/status', { cache: 'no-store', credentials: 'same-origin', signal: abort.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function resetLiveness() {
+    const now = Date.now();
+    lastTick = now;
+    lastHeard = now;
+    if (lastPicture) lastPicture = now;
+  }
+
+  function watchdog() {
+    const now = Date.now();
+    const paused = now - lastTick > 3000; // the page was frozen or throttled (background tab)
+    lastTick = now;
+    if (stopped) return;
+    if (paused) { resetLiveness(); return; }
+    if (mode === 'h264') {
+      if (!ws) return; // between two connections: the close handler decides
+      if (now - lastHeard > SIGNAL_TIMEOUT_MS) {
+        // A connection attempt that hangs (phone not reachable) is ended: its close handler decides.
+        if (ws.readyState === WebSocket.CONNECTING) { try { ws.close(); } catch (e) { /* ignore */ } } else signalLost();
+        return;
+      }
+      if (ws.readyState === WebSocket.OPEN && lastPicture && now - lastPicture > PICTURE_STALL_MS && $('overlay').hidden) {
+        // The phone answers but sends no pictures (e.g. another app took the camera).
+        clearPicture();
+        setStatus(t('noPicture'));
+      }
+    } else if (mode === 'mjpeg') {
+      if (now - lastHeard > SIGNAL_TIMEOUT_MS) { signalLost(); return; }
+      if (!statusInFlight && now - lastStatusCheck >= PING_INTERVAL_MS) checkMjpegSignal();
+    }
+  }
+
+  /** MJPEG has no answers of its own: the status request shows that the phone is still there. */
+  async function checkMjpegSignal() {
+    statusInFlight = true;
+    lastStatusCheck = Date.now();
+    try {
+      const r = await fetchStatus();
+      if (stopped || mode !== 'mjpeg') return;
+      if (r.status === 401) { signalLost(); return; } // the phone ended this session (new access code)
+      if (r.ok) lastHeard = Date.now();
+    } catch (e) {
+      // no answer: lastHeard ages until the signal counts as lost
+    } finally {
+      statusInFlight = false;
+    }
+  }
+
+  /**
+   * The phone is gone: no last picture, no endless "reconnecting". The phone ends all sessions and
+   * changes its access code when it loses its network, so reconnecting needs the new code. Meanwhile
+   * the page keeps asking: if only this device's connection dropped and the phone kept the session,
+   * the picture comes back by itself.
+   */
+  function signalLost() {
+    if (stopped) return;
+    showLogin(t('signalLost'));
+    stopProbe();
+    probeTimer = setInterval(probe, PROBE_INTERVAL_MS);
+  }
+
+  function stopProbe() {
+    if (probeTimer) { clearInterval(probeTimer); probeTimer = null; }
+  }
+
+  async function probe() {
+    if (probing) return;
+    probing = true;
+    try {
+      const r = await fetchStatus();
+      if (!probeTimer) return;
+      if (r.ok) startViewer();
+      else if (r.status === 401) stopProbe(); // the old session (and code) no longer work
+    } catch (e) {
+      // phone still not reachable
+    } finally {
+      probing = false;
+    }
   }
 
   // ------------------------------------------------------------- H.264 / WebCodecs
@@ -280,26 +421,37 @@
     }
     socket.binaryType = 'arraybuffer';
     ws = socket;
+    lastHeard = Date.now();
+    lastPicture = 0;
     socket.onopen = () => {
+      if (ws !== socket) return;
       opened = true;
       retry = 0;
       wsOpenFailures = 0;
+      lastHeard = Date.now();
       setStatus(t('waiting'));
-      pingTimer = setInterval(() => send({ type: 'ping' }), 5000);
+      // The phone answers each ping, so silence means it is gone (see watchdog).
+      pingTimer = setInterval(() => send({ type: 'ping' }), PING_INTERVAL_MS);
     };
     socket.onmessage = (event) => {
+      if (ws !== socket) return;
+      lastHeard = Date.now();
       if (typeof event.data === 'string') onText(event.data);
       else onBinary(event.data);
     };
     socket.onclose = async (event) => {
+      if (ws !== socket) return; // closed on purpose, or replaced by a newer connection
+      ws = null;
       if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-      if (ws === socket) ws = null;
       closeDecoder();
       if (stopped || mode !== 'h264') return;
-      if (event.code === 4401) { showLogin(t('sessionEnded')); return; }
+      clearPicture();
+      // The phone ended this session while it was watched (new access code).
+      if (event.code === 4401) { signalLost(); return; }
       // A rejected handshake (401/503) only surfaces as code 1006, so ask the API why.
       const reason = await diagnose();
-      if (stopped || mode !== 'h264') return;
+      if (stopped || mode !== 'h264' || ws) return;
+      if (reason === 'network' || (reason === 'auth' && opened)) { signalLost(); return; }
       if (reason === 'auth') { showLogin(t('sessionEnded')); return; }
       // The server is reachable but WebSockets are not (e.g. some browsers refuse wss:// to a
       // self-signed certificate even after the page was accepted): use the MJPEG stream instead.
@@ -311,7 +463,7 @@
   /** 'auth' | 'busy' | 'ok' | 'error' | 'network' */
   async function diagnose() {
     try {
-      const r = await fetch('/api/status', { cache: 'no-store', credentials: 'same-origin' });
+      const r = await fetchStatus();
       if (r.status === 401) return 'auth';
       if (!r.ok) return 'error';
       const info = await r.json();
@@ -324,7 +476,8 @@
   function scheduleRetry(reason, reconnect) {
     setStatus(reason === 'busy' ? t('busy') : t('reconnecting'));
     const delay = Math.min(10000, 500 * Math.pow(2, retry++));
-    setTimeout(reconnect, delay);
+    const generation = viewerGeneration;
+    setTimeout(() => { if (generation === viewerGeneration) reconnect(); }, delay);
   }
 
   function send(message) {
@@ -411,6 +564,7 @@
     ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
     frame.close();
     frames++;
+    lastPicture = Date.now();
     if (!$('overlay').hidden) setStatus('');
   }
 
@@ -434,7 +588,7 @@
     if (mode === 'mjpeg') return;
     mode = 'mjpeg';
     if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-    if (ws) { try { ws.close(1000); } catch (e) { /* ignore */ } ws = null; }
+    closeSocket();
     closeDecoder();
     startMjpeg(true);
   }
@@ -444,13 +598,18 @@
     $('canvas').hidden = true;
     const img = $('mjpeg');
     img.hidden = false;
-    img.onload = () => setStatus('');
+    lastHeard = Date.now();
+    img.onload = () => {
+      lastHeard = Date.now();
+      setStatus('');
+    };
     img.onerror = async () => {
       if (stopped || mode !== 'mjpeg') return;
       img.removeAttribute('src');
       const reason = await diagnose();
       if (stopped || mode !== 'mjpeg') return;
       if (reason === 'auth') { showLogin(t('sessionEnded')); return; }
+      if (reason === 'network') { signalLost(); return; }
       scheduleRetry(reason, () => { if (!stopped && mode === 'mjpeg') img.src = '/mjpeg?t=' + Date.now(); });
     };
     img.src = '/mjpeg?t=' + Date.now();

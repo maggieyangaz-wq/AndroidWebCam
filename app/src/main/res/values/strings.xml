@@ -15,7 +15,7 @@
     <string name="connect_steps">1. Put the other device on the same Wi-Fi (or on this phone\'s hotspot).\n2. Open the address below in a browser (Chrome, Edge, Safari or Firefox).\n3. The first time, the browser warns about the self-signed certificate: compare the fingerprint below, then continue.\n4. Enter the access code, or scan the QR code with the other device.</string>
     <string name="connect_no_network">No Wi-Fi or hotspot address found. Connect to Wi-Fi or turn on the hotspot; mobile data is never used.</string>
     <string name="label_access_code">Access code</string>
-    <string name="access_code_hint">New code every time streaming starts.</string>
+    <string name="access_code_hint">New code every time streaming starts or the phone loses its network.</string>
     <string name="label_qr">Scan to connect (one-time link, valid 5 minutes)</string>
     <string name="action_copy">Copy address</string>
     <string name="copied">Address copied</string>
@@ -75,6 +75,7 @@
     <string name="alert_viewer_qr">New viewer via QR code: %1$s (%2$s)</string>
     <string name="alert_locked">Wrong code entered repeatedly from %1$s, blocked for %2$d s</string>
     <string name="alert_rotated">Too many wrong codes: the access code was changed automatically</string>
+    <string name="alert_network_lost">The phone lost its network: viewers were disconnected and the access code was changed</string>
     <string name="kind_wifi">Wi-Fi</string>
     <string name="kind_hotspot">Hotspot</string>
     <string name="kind_usb">USB tethering</string>

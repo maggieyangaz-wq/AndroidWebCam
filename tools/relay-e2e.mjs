@@ -45,9 +45,10 @@ function phone({ signWith = key, publicKey = spki, agents = [], answer = () => n
   return new Promise((resolve) => {
     const ws = new WebSocket(`${wsBase}/phone`);
     ws.binaryType = 'arraybuffer';
-    const conn = { ws, closed: null, ready: false, requests: [] };
+    const conn = { ws, closed: null, ready: false, requests: [], pongs: 0 };
     ws.onmessage = (event) => {
       if (typeof event.data !== 'string') return;
+      if (event.data === 'pong') { conn.pongs++; return; } // answer to the phone's keep-alive ping
       const m = JSON.parse(event.data);
       if (m.type === 'challenge') {
         const text = `AWC-RELAY-1\n${m.host}\n${m.nonce}${tamper ? 'x' : ''}`;
@@ -159,13 +160,35 @@ const get = (token) => fetch(`${base}/v1/snapshot`, { headers: token ? { Authori
   check('newest phone connection replaces the older one', first.ready && second.ready && first.closed === 4000, `close ${first.closed}`);
   second.ws.close(1000);
 
-  // A connection that never authenticates is closed by the relay.
+  // A phone that lost its network may never close its connection: once it has missed its keep-alive
+  // pings (75 s) it counts as offline, so agents learn it at once instead of waiting for a timeout.
+  let answering = true;
+  const quiet = await phone({ agents: [{ id: agent.id, hash: agent.hash }], answer: () => (answering ? seal(agent.e2e, agent.id, jpeg) : null) });
+  const quietSince = Date.now();
+  let lastPing = quietSince;
+  const pinger = setInterval(() => { quiet.ws.send('ping'); lastPing = Date.now(); }, 20000);
+
+  // Meanwhile: a connection that never authenticates is closed by the relay.
   const idle = new WebSocket(`${wsBase}/phone`);
   const idleClosed = await new Promise((resolve) => {
     idle.onclose = (event) => resolve(event.code);
     setTimeout(() => resolve('still open'), 40000);
   });
   check('unauthenticated connection closed after the timeout', idleClosed === 4408, `close ${idleClosed}`);
+
+  await sleep(quietSince + 77000 - Date.now());
+  r = await get(agent.token);
+  check('a phone that keeps pinging stays online past the silence limit', quiet.ready && quiet.pongs >= 3 && r.status === 200,
+    `${r.status}, ${quiet.pongs} pongs`);
+  clearInterval(pinger);
+  answering = false; // gone: no pings, no answers
+  await sleep(lastPing + 77000 - Date.now());
+  const asked = Date.now();
+  r = await get(agent.token);
+  check('a silent phone (no ping for 75 s) is offline: 503 at once', r.status === 503 && Date.now() - asked < 5000,
+    `${r.status} after ${Date.now() - asked} ms`);
+  await sleep(1000);
+  check('the silent phone connection is closed by the relay', quiet.closed === 4408, `close ${quiet.closed}`);
 
   const failed = results.filter((x) => !x.ok).length;
   console.log(`\n${results.length - failed}/${results.length} relay checks passed`);
